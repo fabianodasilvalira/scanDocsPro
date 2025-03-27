@@ -4,20 +4,28 @@ import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { CheckCircle, FolderOpen, Plus, Home, Download, Share2, Edit } from "lucide-react"
+import { CheckCircle, FolderOpen, Plus, Home, Download, Share2, Edit, FileText } from "lucide-react"
 
 export default function ScanSuccess() {
   const router = useRouter()
   const [finalImage, setFinalImage] = useState<string | null>(null)
+  // Adicionar estado para o texto extraído
+  const [extractedText, setExtractedText] = useState<string | null>(null)
 
   useEffect(() => {
     // Get the final image from session storage
     const storedImage = sessionStorage.getItem("finalImage") || sessionStorage.getItem("processedImage")
+    const storedText = sessionStorage.getItem("extractedText")
+
     if (storedImage) {
       setFinalImage(storedImage)
     } else {
       // If no image is found, use a placeholder
       setFinalImage("/placeholder.svg?height=800&width=600")
+    }
+
+    if (storedText) {
+      setExtractedText(storedText)
     }
   }, [])
 
@@ -76,6 +84,18 @@ export default function ScanSuccess() {
             {finalImage && (
               <div className="w-full mb-6 rounded-lg overflow-hidden shadow-md">
                 <img src={finalImage || "/placeholder.svg"} alt="Documento processado" className="w-full h-auto" />
+              </div>
+            )}
+
+            {extractedText && (
+              <div className="w-full mb-6 bg-gray-100 dark:bg-gray-700 rounded-lg p-4">
+                <div className="flex items-center mb-2">
+                  <FileText className="h-5 w-5 text-blue-600 dark:text-blue-400 mr-2" />
+                  <h3 className="font-medium">Texto Extraído (OCR)</h3>
+                </div>
+                <div className="max-h-32 overflow-y-auto">
+                  <pre className="text-xs whitespace-pre-wrap text-gray-700 dark:text-gray-300">{extractedText}</pre>
+                </div>
               </div>
             )}
 

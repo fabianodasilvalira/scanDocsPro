@@ -576,96 +576,166 @@ export default function ScanReview() {
     const img = new Image()
     img.crossOrigin = "anonymous"
     img.onload = () => {
-      // Determine if we're using perspective correction
-      const usePerspective = editMode === "perspective"
+      try {
+        // Determine if we're using perspective correction
+        const usePerspective = editMode === "perspective"
 
-      if (usePerspective) {
-        // For perspective correction, we need to maintain the original canvas size
-        canvas.width = img.width
-        canvas.height = img.height
+        if (usePerspective) {
+          // For perspective correction, we need to maintain the original canvas size
+          canvas.width = img.width
+          canvas.height = img.height
 
-        // Clear canvas
-        ctx.clearRect(0, 0, canvas.width, canvas.height)
+          // Clear canvas
+          ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-        // Draw the original image with perspective correction
-        ctx.drawImage(img, 0, 0)
+          // Draw the original image with perspective correction
+          ctx.drawImage(img, 0, 0)
 
-        // In a real app, we would apply the perspective transform here
-        // For this demo, we'll just highlight the area
-        ctx.strokeStyle = "#00ff00"
-        ctx.lineWidth = 3
-        ctx.beginPath()
-        ctx.moveTo(perspectivePoints[0].x, perspectivePoints[0].y)
-        ctx.lineTo(perspectivePoints[1].x, perspectivePoints[1].y)
-        ctx.lineTo(perspectivePoints[3].x, perspectivePoints[3].y)
-        ctx.lineTo(perspectivePoints[2].x, perspectivePoints[2].y)
-        ctx.closePath()
-        ctx.stroke()
-      } else {
-        // Se já estamos usando a imagem recortada, apenas copiar para o canvas
-        canvas.width = img.width
-        canvas.height = img.height
-        ctx.drawImage(img, 0, 0)
-      }
-
-      // Apply rotation if needed
-      if (rotation !== 0) {
-        // Create a temporary canvas for rotation
-        const tempCanvas = document.createElement("canvas")
-        const tempCtx = tempCanvas.getContext("2d")
-
-        if (tempCtx) {
-          // Set dimensions based on rotation
-          if (rotation === 90 || rotation === 270) {
-            tempCanvas.width = canvas.height
-            tempCanvas.height = canvas.width
-          } else {
-            tempCanvas.width = canvas.width
-            tempCanvas.height = canvas.height
-          }
-
-          // Rotate and draw
-          tempCtx.save()
-          tempCtx.translate(tempCanvas.width / 2, tempCanvas.height / 2)
-          tempCtx.rotate((rotation * Math.PI) / 180)
-
-          if (rotation === 90 || rotation === 270) {
-            tempCtx.drawImage(canvas, -canvas.height / 2, -canvas.width / 2)
-          } else {
-            tempCtx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2)
-          }
-
-          tempCtx.restore()
-
-          // Clear original canvas and resize
-          canvas.width = tempCanvas.width
-          canvas.height = tempCanvas.height
-
-          // Copy back to original canvas
-          ctx.drawImage(tempCanvas, 0, 0)
+          // In a real app, we would apply the perspective transform here
+          // For this demo, we'll just highlight the area
+          ctx.strokeStyle = "#00ff00"
+          ctx.lineWidth = 3
+          ctx.beginPath()
+          ctx.moveTo(perspectivePoints[0].x, perspectivePoints[0].y)
+          ctx.lineTo(perspectivePoints[1].x, perspectivePoints[1].y)
+          ctx.lineTo(perspectivePoints[3].x, perspectivePoints[3].y)
+          ctx.lineTo(perspectivePoints[2].x, perspectivePoints[2].y)
+          ctx.closePath()
+          ctx.stroke()
+        } else {
+          // Se já estamos usando a imagem recortada, apenas copiar para o canvas
+          canvas.width = img.width
+          canvas.height = img.height
+          ctx.drawImage(img, 0, 0)
         }
+
+        // Apply rotation if needed
+        if (rotation !== 0) {
+          // Create a temporary canvas for rotation
+          const tempCanvas = document.createElement("canvas")
+          const tempCtx = tempCanvas.getContext("2d")
+
+          if (tempCtx) {
+            // Set dimensions based on rotation
+            if (rotation === 90 || rotation === 270) {
+              tempCanvas.width = canvas.height
+              tempCanvas.height = canvas.width
+            } else {
+              tempCanvas.width = canvas.width
+              tempCanvas.height = canvas.height
+            }
+
+            // Rotate and draw
+            tempCtx.save()
+            tempCtx.translate(tempCanvas.width / 2, tempCanvas.height / 2)
+            tempCtx.rotate((rotation * Math.PI) / 180)
+
+            if (rotation === 90 || rotation === 270) {
+              tempCtx.drawImage(canvas, -canvas.height / 2, -canvas.width / 2)
+            } else {
+              tempCtx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2)
+            }
+
+            tempCtx.restore()
+
+            // Clear original canvas and resize
+            canvas.width = tempCanvas.width
+            canvas.height = tempCanvas.height
+
+            // Copy back to original canvas
+            ctx.drawImage(tempCanvas, 0, 0)
+          }
+        }
+
+        // Redimensionar a imagem se for muito grande
+        const MAX_DIMENSION = 1500 // Limitar a dimensão máxima
+        let finalCanvas = canvas
+
+        if (canvas.width > MAX_DIMENSION || canvas.height > MAX_DIMENSION) {
+          const tempCanvas = document.createElement("canvas")
+          const tempCtx = tempCanvas.getContext("2d")
+
+          if (tempCtx) {
+            const ratio = Math.min(MAX_DIMENSION / canvas.width, MAX_DIMENSION / canvas.height)
+            tempCanvas.width = canvas.width * ratio
+            tempCanvas.height = canvas.height * ratio
+
+            tempCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, tempCanvas.width, tempCanvas.height)
+            finalCanvas = tempCanvas
+          }
+        }
+
+        // Get the final image data URL with reduced quality to save space
+        const processedImageUrl = finalCanvas.toDataURL("image/jpeg", 0.7)
+
+        // Store in sessionStorage for the edit page
+        try {
+          sessionStorage.setItem("processedImage", processedImageUrl)
+          sessionStorage.setItem("originalImage", processedImageUrl) // Armazenar a imagem original também
+
+          // Store edit data for the edit page
+          sessionStorage.setItem(
+            "editData",
+            JSON.stringify({
+              cropRect,
+              perspectivePoints,
+              rotation,
+              editMode,
+            }),
+          )
+
+          // Navigate to edit page immediately
+          setIsProcessing(false)
+          router.push("/scan/edit")
+        } catch (storageError) {
+          console.error("Storage error:", storageError)
+
+          // Tentar com uma qualidade ainda menor se falhar
+          const lowQualityImageUrl = finalCanvas.toDataURL("image/jpeg", 0.4)
+          try {
+            sessionStorage.setItem("processedImage", lowQualityImageUrl)
+            sessionStorage.setItem("originalImage", lowQualityImageUrl) // Armazenar a imagem original também
+
+            // Store edit data for the edit page
+            sessionStorage.setItem(
+              "editData",
+              JSON.stringify({
+                cropRect,
+                perspectivePoints,
+                rotation,
+                editMode,
+              }),
+            )
+
+            setIsProcessing(false)
+            router.push("/scan/edit")
+          } catch (finalError) {
+            setIsProcessing(false)
+            toast({
+              title: "Erro ao processar imagem",
+              description: "A imagem é muito grande para ser processada. Tente reduzir a resolução ou recortar mais.",
+              variant: "destructive",
+            })
+          }
+        }
+      } catch (error) {
+        console.error("Error processing image:", error)
+        setIsProcessing(false)
+        toast({
+          title: "Erro ao processar imagem",
+          description: "Ocorreu um erro ao processar a imagem. Tente novamente.",
+          variant: "destructive",
+        })
       }
+    }
 
-      // Get the final image data URL
-      const processedImageUrl = canvas.toDataURL("image/jpeg", 0.95)
-
-      // Store in sessionStorage for the edit page
-      sessionStorage.setItem("processedImage", processedImageUrl)
-
-      // Store edit data for the edit page
-      sessionStorage.setItem(
-        "editData",
-        JSON.stringify({
-          cropRect,
-          perspectivePoints,
-          rotation,
-          editMode,
-        }),
-      )
-
-      // Navigate to edit page immediately
+    img.onerror = () => {
       setIsProcessing(false)
-      router.push("/scan/edit")
+      toast({
+        title: "Erro ao carregar imagem",
+        description: "Não foi possível carregar a imagem para processamento.",
+        variant: "destructive",
+      })
     }
 
     img.src = sourceImage

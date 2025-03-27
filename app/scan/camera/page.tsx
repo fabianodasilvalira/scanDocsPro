@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
-import { ArrowLeft, Camera, FlipHorizontal, Lightbulb, ZoomIn, ZoomOut, Check } from "lucide-react"
+import { ArrowLeft, Camera, FlipHorizontal, Lightbulb, ZoomIn, ZoomOut, Check, Upload } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/components/ui/use-toast"
 import { useMobile } from "@/hooks/use-mobile"
@@ -26,92 +26,204 @@ export default function ScanCamera() {
   const [autoDetectEnabled, setAutoDetectEnabled] = useState(true)
   const [documentType, setDocumentType] = useState<"auto" | "a4" | "id" | "receipt">("auto")
   const [detectionConfidence, setDetectionConfidence] = useState(0)
+  const [cameraError, setCameraError] = useState<string | null>(null)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const photoRef = useRef<HTMLImageElement>(null)
   const detectionCanvasRef = useRef<HTMLCanvasElement>(null)
 
-  // Initialize camera
+  // Componente de fallback para quando a câmera não estiver disponível
+  const CameraNotAvailable = () => (
+    <div className="min-h-screen bg-black flex flex-col">
+      <div className="flex items-center p-4 bg-black/80 z-10">
+        <Button variant="ghost" size="icon" onClick={() => router.push("/")} className="mr-4 text-white">
+          <ArrowLeft className="h-5 w-5" />
+        </Button>
+        <div>
+          <h1 className="text-xl font-bold text-white">Digitalizar Documento</h1>
+          <p className="text-sm text-gray-300">Câmera não disponível</p>
+        </div>
+      </div>
+
+      <div className="flex-1 flex items-center justify-center bg-gray-900">
+        <div className="text-center p-6 max-w-md">
+          <div className="mb-6">
+            <Camera className="h-16 w-16 text-gray-500 mx-auto mb-4" />
+            <h2 className="text-xl font-bold text-white mb-2">Câmera não disponível</h2>
+            <p className="text-gray-400 mb-6">
+              Não foi possível acessar a câmera do seu dispositivo. Isso pode ocorrer pelos seguintes motivos:
+            </p>
+            <ul className="text-left text-gray-400 space-y-2 mb-6">
+              <li>• Seu navegador não suporta acesso à câmera</li>
+              <li>• As permissões de câmera foram negadas</li>
+              <li>• Você está usando um dispositivo sem câmera</li>
+              <li>• A câmera está sendo usada por outro aplicativo</li>
+            </ul>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            <Button onClick={() => router.push("/scan/upload")} className="bg-blue-600 hover:bg-blue-700">
+              <Upload className="mr-2 h-4 w-4" />
+              Fazer Upload de Imagem
+            </Button>
+            <Button onClick={() => router.push("/")} variant="outline" className="border-gray-600">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Voltar para o Início
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+
+  // Substitua a função initCamera por esta versão ainda mais simplificada
+  const initCamera = async () => {
+    try {
+      console.log("Iniciando acesso à câmera...")
+
+      // Verificação mais robusta da API
+      if (typeof window === "undefined" || typeof navigator === "undefined") {
+        throw new Error("Ambiente de navegador não disponível")
+      }
+
+      if (!navigator.mediaDevices) {
+        throw new Error("API MediaDevices não disponível")
+      }
+
+      if (typeof navigator.mediaDevices.getUserMedia !== "function") {
+        throw new Error("Método getUserMedia não disponível")
+      }
+
+      console.log("API de câmera disponível, tentando acessar...")
+
+      // Usar a configuração mais simples possível
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false,
+      })
+
+      console.log("Stream de câmera obtido com sucesso")
+
+      if (!mediaStream) {
+        throw new Error("Stream de mídia vazio ou inválido")
+      }
+
+      setStream(mediaStream)
+      setCameraPermission("granted")
+      setCameraError(null)
+
+      // Verificar se o elemento de vídeo existe
+      if (!videoRef.current) {
+        throw new Error("Elemento de vídeo não encontrado")
+      }
+
+      // Atribuir o stream ao elemento de vídeo
+      videoRef.current.srcObject = mediaStream
+
+      try {
+        await videoRef.current.play()
+        console.log("Vídeo iniciado com sucesso")
+
+        // Iniciar detecção de documento após inicialização da câmera
+        if (autoDetectEnabled) {
+          const frameId = startDocumentDetection()
+          return frameId
+        }
+      } catch (playError) {
+        console.error("Erro ao iniciar reprodução de vídeo:", playError)
+        throw new Error("Não foi possível iniciar o stream de vídeo")
+      }
+    } catch (error) {
+      console.error("Erro detalhado ao acessar câmera:", error)
+      setCameraPermission("denied")
+      setCameraError(error instanceof Error ? error.message : "Erro desconhecido ao acessar a câmera")
+
+      toast({
+        title: "Erro ao acessar a câmera",
+        description: "Verifique se seu dispositivo tem uma câmera e se você concedeu permissão para usá-la.",
+        variant: "destructive",
+      })
+    }
+
+    return null
+  }
+
+  // Modifique a verificação inicial da API MediaDevices para ser mais robusta
   useEffect(() => {
+    // Verificar se estamos no navegador e se a API MediaDevices está disponível
+    if (typeof window !== "undefined") {
+      if (!navigator || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+        setCameraError("Seu navegador não suporta acesso à câmera ou você está usando um ambiente não seguro (HTTP).")
+        setCameraPermission("denied")
+        toast({
+          title: "Câmera não suportada",
+          description: "Seu navegador não suporta acesso à câmera. Tente usar Chrome, Firefox ou Safari atualizados.",
+          variant: "destructive",
+        })
+      }
+    }
+  }, [toast])
+
+  // Substitua o useEffect que chama initCamera por esta versão mais segura
+  useEffect(() => {
+    // Garantir que estamos no lado do cliente
+    if (typeof window === "undefined") return
+
+    let animationFrameId: number | null = null
     let mounted = true
 
-    const initCamera = async () => {
+    const setupCamera = async () => {
       try {
-        // Check if camera permissions are available
-        const permissionStatus = await navigator.permissions.query({ name: "camera" as PermissionName })
-        setCameraPermission(permissionStatus.state as "granted" | "denied" | "prompt")
+        console.log("Configurando câmera...")
 
-        if (permissionStatus.state === "denied") {
-          toast({
-            title: "Acesso à câmera negado",
-            description: "Por favor, permita o acesso à câmera nas configurações do seu navegador.",
-            variant: "destructive",
-          })
-          return
-        }
+        // Verificar se ainda estamos montados
+        if (!mounted) return
 
-        // Request camera access with highest possible resolution
-        const constraints = {
-          video: {
-            facingMode: facingMode,
-            width: { ideal: 3840 }, // 4K
-            height: { ideal: 2160 },
-            frameRate: { ideal: 30 },
-          },
-          audio: false,
-        }
-
-        const mediaStream = await navigator.mediaDevices.getUserMedia(constraints)
-
+        // Inicializar a câmera
+        animationFrameId = (await initCamera()) as number | null
+      } catch (setupError) {
+        console.error("Erro na configuração da câmera:", setupError)
         if (mounted) {
-          setStream(mediaStream)
-
-          if (videoRef.current) {
-            videoRef.current.srcObject = mediaStream
-            await videoRef.current.play()
-
-            // Start document detection after camera is initialized
-            if (autoDetectEnabled) {
-              startDocumentDetection()
-            }
-          }
-
-          setCameraPermission("granted")
-        }
-      } catch (error) {
-        console.error("Error accessing camera:", error)
-
-        if (mounted) {
+          setCameraError(
+            "Erro ao configurar câmera: " + (setupError instanceof Error ? setupError.message : "Erro desconhecido"),
+          )
           setCameraPermission("denied")
-          toast({
-            title: "Erro ao acessar a câmera",
-            description: "Verifique se seu dispositivo tem uma câmera e se você concedeu permissão para usá-la.",
-            variant: "destructive",
-          })
         }
       }
     }
 
-    initCamera()
+    // Executar a configuração da câmera
+    setupCamera()
 
     // Cleanup function
     return () => {
       mounted = false
+
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId)
+      }
+
       if (stream) {
-        stream.getTracks().forEach((track) => track.stop())
+        stream.getTracks().forEach((track) => {
+          try {
+            track.stop()
+          } catch (stopError) {
+            console.error("Erro ao parar track:", stopError)
+          }
+        })
       }
     }
   }, [facingMode, toast, autoDetectEnabled])
 
   // Document detection simulation
   const startDocumentDetection = () => {
-    if (!videoRef.current || !detectionCanvasRef.current) return
+    if (!videoRef.current || !detectionCanvasRef.current) return null
 
     const video = videoRef.current
     const canvas = detectionCanvasRef.current
     const ctx = canvas.getContext("2d", { willReadFrequently: true })
-    if (!ctx) return
+    if (!ctx) return null
 
     let animationFrameId: number
     let lastDetectionTime = 0
@@ -223,10 +335,8 @@ export default function ScanCamera() {
     // Start detection loop
     animationFrameId = requestAnimationFrame(detectDocument)
 
-    // Cleanup function
-    return () => {
-      cancelAnimationFrame(animationFrameId)
-    }
+    // Return the animation frame ID so it can be cancelled in the cleanup
+    return animationFrameId
   }
 
   // Handle camera flip
@@ -237,7 +347,52 @@ export default function ScanCamera() {
     }
 
     // Toggle facing mode
-    setFacingMode((prev) => (prev === "user" ? "environment" : "user"))
+    const newFacingMode = facingMode === "user" ? "environment" : "user"
+    setFacingMode(newFacingMode)
+
+    try {
+      // Try to get the camera with the new facing mode
+      const newConstraints = {
+        video: { facingMode: newFacingMode },
+        audio: false,
+      }
+
+      const newStream = await navigator.mediaDevices.getUserMedia(newConstraints)
+      setStream(newStream)
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = newStream
+        await videoRef.current.play()
+      }
+    } catch (error: any) {
+      console.error("Error switching camera:", error)
+      toast({
+        title: "Erro ao alternar câmera",
+        description: "Não foi possível alternar entre as câmeras. Seu dispositivo pode ter apenas uma câmera.",
+        variant: "destructive",
+      })
+
+      // Try to restore the previous camera
+      try {
+        const fallbackConstraints = {
+          video: true,
+          audio: false,
+        }
+
+        const fallbackStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints)
+        setStream(fallbackStream)
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = fallbackStream
+          await videoRef.current.play()
+        }
+
+        // Restore the previous facing mode
+        setFacingMode(facingMode)
+      } catch (fallbackError) {
+        console.error("Failed to restore camera:", fallbackError)
+      }
+    }
   }
 
   // Handle flash toggle (only works on supported devices)
@@ -356,6 +511,7 @@ export default function ScanCamera() {
 
       // Store in sessionStorage for the edit page
       sessionStorage.setItem("capturedImage", imageDataUrl)
+      sessionStorage.setItem("originalImage", imageDataUrl) // Armazenar a imagem original também
       sessionStorage.setItem("documentData", JSON.stringify(documentData))
 
       // If we have a photo element, show the captured image
@@ -376,249 +532,331 @@ export default function ScanCamera() {
           // Stop camera stream before navigating
           tracks.forEach((track) => track.stop())
 
-          // Navigate to review page after a short delay
+          // Navigate directly to edit page
           setTimeout(() => {
-            router.push("/scan/review")
+            router.push("/scan/edit")
           }, 300)
         }
       }, 100)
     }
   }
 
+  // Adicione esta função para tentar uma abordagem alternativa de acesso à câmera
+  const tryAlternativeCameraAccess = async () => {
+    try {
+      // Limpar estado atual
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop())
+        setStream(null)
+      }
+
+      setCameraPermission("prompt")
+      setCameraError(null)
+
+      console.log("Tentando abordagem alternativa para acesso à câmera...")
+
+      // Usar uma abordagem mais básica
+      const constraints = {
+        video: {
+          width: { ideal: 320 },
+          height: { ideal: 240 },
+          facingMode: "environment",
+        },
+        audio: false,
+      }
+
+      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints)
+
+      setStream(mediaStream)
+      setCameraPermission("granted")
+      setCameraError(null)
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = mediaStream
+        await videoRef.current.play()
+
+        if (autoDetectEnabled) {
+          startDocumentDetection()
+        }
+      }
+
+      toast({
+        title: "Câmera conectada",
+        description: "Acesso à câmera estabelecido com configurações alternativas.",
+        variant: "default",
+      })
+    } catch (error) {
+      console.error("Falha na abordagem alternativa:", error)
+      setCameraPermission("denied")
+      setCameraError(
+        "Todas as tentativas de acesso à câmera falharam. Seu dispositivo pode não suportar acesso à câmera via navegador.",
+      )
+
+      toast({
+        title: "Erro ao acessar a câmera",
+        description: "Não foi possível acessar a câmera mesmo com configurações alternativas.",
+        variant: "destructive",
+      })
+    }
+  }
+
   return (
-    <div className="min-h-screen bg-black flex flex-col">
-      <div className="flex items-center p-4 bg-black/80 z-10">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => {
-            if (stream) {
-              stream.getTracks().forEach((track) => track.stop())
-            }
-            router.push("/scan/start")
-          }}
-          className="mr-4 text-white"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </Button>
-        <div>
-          <h1 className="text-xl font-bold text-white">Digitalizar Documento</h1>
-          <p className="text-sm text-gray-300">Posicione o documento na área de captura</p>
-        </div>
-      </div>
-
-      <div className="relative flex-1 w-full bg-black overflow-hidden">
-        {cameraPermission === "prompt" && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-900 text-white z-10">
-            <div className="text-center p-4">
-              <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-current border-r-transparent align-[-0.125em] motion-reduce:animate-[spin_1.5s_linear_infinite] mb-4"></div>
-              <p>Iniciando câmera...</p>
-              <p className="text-sm mt-2 text-gray-400">Permita o acesso à câmera quando solicitado</p>
+    <>
+      {cameraPermission === "denied" && cameraError && !stream ? (
+        <CameraNotAvailable />
+      ) : (
+        <div className="min-h-screen bg-black flex flex-col">
+          <div className="flex items-center p-4 bg-black/80 z-10">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => {
+                if (stream) {
+                  stream.getTracks().forEach((track) => track.stop())
+                }
+                router.push("/")
+              }}
+              className="mr-4 text-white"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </Button>
+            <div>
+              <h1 className="text-xl font-bold text-white">Digitalizar Documento</h1>
+              <p className="text-sm text-gray-300">Posicione o documento na área de captura</p>
             </div>
           </div>
-        )}
 
-        {cameraPermission === "denied" && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-900 text-white z-10">
-            <div className="text-center p-4">
-              <p className="text-red-400 font-bold mb-2">Acesso à câmera negado</p>
-              <p className="text-sm mb-4">Para usar o scanner, você precisa permitir o acesso à câmera.</p>
-              <Button onClick={() => router.push("/scan/start")} variant="outline" className="border-gray-600">
-                Voltar
-              </Button>
-            </div>
-          </div>
-        )}
-
-        <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" autoPlay playsInline muted />
-
-        <canvas ref={canvasRef} className="hidden" />
-
-        <canvas ref={detectionCanvasRef} className="hidden" />
-
-        <img ref={photoRef} className="hidden absolute inset-0 w-full h-full object-cover" alt="Captured document" />
-
-        {/* Document detection overlay */}
-        {cameraPermission === "granted" && !isCapturing && (
-          <div className="absolute inset-0 pointer-events-none">
-            {documentDetected && documentCorners ? (
-              <svg className="absolute inset-0 w-full h-full">
-                <polygon
-                  points={documentCorners.map((corner) => `${corner.x},${corner.y}`).join(" ")}
-                  fill="rgba(0, 255, 0, 0.1)"
-                  stroke="#00ff00"
-                  strokeWidth="3"
-                />
-              </svg>
-            ) : (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div
-                  className={cn(
-                    "border-2 border-dashed rounded-md transition-all duration-300",
-                    documentType === "a4"
-                      ? "w-[70%] h-[85%]"
-                      : documentType === "id"
-                        ? "w-[60%] h-[40%]"
-                        : documentType === "receipt"
-                          ? "w-[40%] h-[80%]"
-                          : "w-[85%] h-[85%]",
-                    detectionConfidence > 50 ? "border-yellow-400" : "border-white/50",
-                  )}
-                ></div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Capture progress overlay */}
-        {isCapturing && (
-          <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-20">
-            <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-full border-4 border-blue-500 flex items-center justify-center">
-              <div className="text-center">
-                <div className="text-xl sm:text-2xl font-bold text-white mb-1">{captureProgress}%</div>
-                <div className="text-xs text-blue-300">Digitalizando</div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Camera controls */}
-        {cameraPermission === "granted" && !isCapturing && (
-          <>
-            {/* Document detection status */}
-            <div className="absolute top-4 left-4 bg-black/60 text-white px-3 py-1 rounded-full text-sm">
-              {documentDetected ? (
-                <span className="flex items-center text-green-400">
-                  <div className="w-2 h-2 rounded-full bg-green-400 mr-2"></div>
-                  Documento detectado
-                </span>
-              ) : detectionConfidence > 50 ? (
-                <span className="flex items-center text-yellow-400">
-                  <div className="w-2 h-2 rounded-full bg-yellow-400 mr-2"></div>
-                  Quase lá...
-                </span>
-              ) : (
-                <span className="flex items-center text-gray-400">
-                  <div className="w-2 h-2 rounded-full bg-gray-400 mr-2"></div>
-                  Procurando documento...
-                </span>
-              )}
-            </div>
-
-            {/* Document type selector */}
-            <div className="absolute top-4 right-4 flex space-x-2">
-              <Button
-                size="sm"
-                variant={documentType === "auto" ? "default" : "outline"}
-                className={documentType === "auto" ? "bg-blue-600" : "bg-black/60 text-white border-gray-600"}
-                onClick={() => changeDocumentType("auto")}
-              >
-                Auto
-              </Button>
-              <Button
-                size="sm"
-                variant={documentType === "a4" ? "default" : "outline"}
-                className={documentType === "a4" ? "bg-blue-600" : "bg-black/60 text-white border-gray-600"}
-                onClick={() => changeDocumentType("a4")}
-              >
-                A4
-              </Button>
-              <Button
-                size="sm"
-                variant={documentType === "id" ? "default" : "outline"}
-                className={documentType === "id" ? "bg-blue-600" : "bg-black/60 text-white border-gray-600"}
-                onClick={() => changeDocumentType("id")}
-              >
-                ID
-              </Button>
-            </div>
-
-            {/* Right side controls */}
-            <div className="absolute bottom-24 right-4 flex flex-col space-y-2">
-              <button
-                className="h-12 w-12 rounded-full bg-black/60 flex items-center justify-center text-white hover:bg-black/80 transition-colors"
-                onClick={toggleCamera}
-              >
-                <FlipHorizontal className="h-6 w-6" />
-              </button>
-
-              <button
-                className={cn(
-                  "h-12 w-12 rounded-full flex items-center justify-center text-white transition-colors",
-                  flashActive ? "bg-yellow-500/80" : "bg-black/60 hover:bg-black/80",
-                )}
-                onClick={toggleFlash}
-              >
-                <Lightbulb className="h-6 w-6" />
-              </button>
-
-              <button
-                className="h-12 w-12 rounded-full bg-black/60 flex items-center justify-center text-white hover:bg-black/80 transition-colors"
-                onClick={() => handleZoom("in")}
-              >
-                <ZoomIn className="h-6 w-6" />
-              </button>
-
-              <button
-                className="h-12 w-12 rounded-full bg-black/60 flex items-center justify-center text-white hover:bg-black/80 transition-colors"
-                onClick={() => handleZoom("out")}
-              >
-                <ZoomOut className="h-6 w-6" />
-              </button>
-            </div>
-
-            {/* Confidence indicator */}
-            {detectionConfidence > 0 && (
-              <div className="absolute bottom-24 left-4 right-24 flex flex-col">
-                <div className="flex justify-between text-xs text-white mb-1">
-                  <span>Estabilidade</span>
-                  <span>{detectionConfidence}%</span>
+          <div className="relative flex-1 w-full bg-black overflow-hidden">
+            {cameraPermission === "prompt" && !cameraError && (
+              <div className="absolute inset-0 flex items-center justify-center bg-gray-900 text-white z-10">
+                <div className="text-center p-4">
+                  <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-current border-r-transparent align-[-0.125em] motion-reduce:animate-[spin_1.5s_linear_infinite] mb-4"></div>
+                  <p>Iniciando câmera...</p>
+                  <p className="text-sm mt-2 text-gray-400">Permita o acesso à câmera quando solicitado</p>
                 </div>
-                <Progress
-                  value={detectionConfidence}
-                  className="h-1 bg-gray-700"
-                  indicatorClassName={cn(
-                    detectionConfidence < 30
-                      ? "bg-red-500"
-                      : detectionConfidence < 70
-                        ? "bg-yellow-500"
-                        : "bg-green-500",
-                  )}
-                />
               </div>
             )}
-          </>
-        )}
-      </div>
 
-      {/* Bottom controls */}
-      <div className="p-4 bg-black flex justify-center">
-        <Button
-          size="lg"
-          className={cn(
-            "rounded-full h-16 w-16 p-0 flex items-center justify-center",
-            documentDetected ? "bg-green-500 hover:bg-green-600" : "bg-blue-500 hover:bg-blue-600",
-          )}
-          disabled={isCapturing || cameraPermission !== "granted"}
-          onClick={capturePhoto}
-        >
-          {documentDetected ? <Check className="h-8 w-8" /> : <Camera className="h-8 w-8" />}
-        </Button>
-      </div>
+            {(cameraPermission === "denied" || cameraError) && (
+              <div className="absolute inset-0 flex items-center justify-center bg-gray-900 text-white z-10">
+                <div className="text-center p-4 max-w-md">
+                  <p className="text-red-400 font-bold mb-2">Problema ao acessar a câmera</p>
+                  <p className="text-sm mb-4">
+                    {cameraError || "Para usar o scanner, você precisa permitir o acesso à câmera."}
+                  </p>
+                  <div className="flex flex-col gap-3">
+                    <Button onClick={() => router.push("/scan/upload")} className="bg-blue-600 hover:bg-blue-700">
+                      <Upload className="mr-2 h-4 w-4" />
+                      Fazer Upload de Imagem
+                    </Button>
+                    <Button variant="outline" className="border-gray-600" onClick={tryAlternativeCameraAccess}>
+                      <Camera className="mr-2 h-4 w-4" />
+                      Tentar Novamente
+                    </Button>
+                    <Button onClick={() => router.push("/")} variant="outline" className="border-gray-600">
+                      <ArrowLeft className="mr-2 h-4 w-4" />
+                      Voltar
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
 
-      {/* Tips */}
-      <div className="p-4 bg-black text-white">
-        <div className="bg-gray-800/80 rounded-lg p-3 text-sm max-w-md mx-auto">
-          <h3 className="font-medium text-white mb-2">Dicas:</h3>
-          <ul className="space-y-1 list-disc pl-5 text-gray-300">
-            <li>Posicione o documento dentro da área demarcada</li>
-            <li>Certifique-se de que há boa iluminação</li>
-            <li>Mantenha a câmera estável durante a captura</li>
-            <li>Selecione o tipo de documento para melhor detecção</li>
-          </ul>
+            <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" autoPlay playsInline muted />
+
+            <canvas ref={canvasRef} className="hidden" />
+
+            <canvas ref={detectionCanvasRef} className="hidden" />
+
+            <img
+              ref={photoRef}
+              className="hidden absolute inset-0 w-full h-full object-cover"
+              alt="Captured document"
+            />
+
+            {/* Document detection overlay */}
+            {cameraPermission === "granted" && !isCapturing && (
+              <div className="absolute inset-0 pointer-events-none">
+                {documentDetected && documentCorners ? (
+                  <svg className="absolute inset-0 w-full h-full">
+                    <polygon
+                      points={documentCorners.map((corner) => `${corner.x},${corner.y}`).join(" ")}
+                      fill="rgba(0, 255, 0, 0.1)"
+                      stroke="#00ff00"
+                      strokeWidth="3"
+                    />
+                  </svg>
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div
+                      className={cn(
+                        "border-2 border-dashed rounded-md transition-all duration-300",
+                        documentType === "a4"
+                          ? "w-[70%] h-[85%]"
+                          : documentType === "id"
+                            ? "w-[60%] h-[40%]"
+                            : documentType === "receipt"
+                              ? "w-[40%] h-[80%]"
+                              : "w-[85%] h-[85%]",
+                        detectionConfidence > 50 ? "border-yellow-400" : "border-white/50",
+                      )}
+                    ></div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Capture progress overlay */}
+            {isCapturing && (
+              <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-20">
+                <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-full border-4 border-blue-500 flex items-center justify-center">
+                  <div className="text-center">
+                    <div className="text-xl sm:text-2xl font-bold text-white mb-1">{captureProgress}%</div>
+                    <div className="text-xs text-blue-300">Digitalizando</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Camera controls */}
+            {cameraPermission === "granted" && !isCapturing && (
+              <>
+                {/* Document detection status */}
+                <div className="absolute top-4 left-4 bg-black/60 text-white px-3 py-1 rounded-full text-sm">
+                  {documentDetected ? (
+                    <span className="flex items-center text-green-400">
+                      <div className="w-2 h-2 rounded-full bg-green-400 mr-2"></div>
+                      Documento detectado
+                    </span>
+                  ) : detectionConfidence > 50 ? (
+                    <span className="flex items-center text-yellow-400">
+                      <div className="w-2 h-2 rounded-full bg-yellow-400 mr-2"></div>
+                      Quase lá...
+                    </span>
+                  ) : (
+                    <span className="flex items-center text-gray-400">
+                      <div className="w-2 h-2 rounded-full bg-gray-400 mr-2"></div>
+                      Procurando documento...
+                    </span>
+                  )}
+                </div>
+
+                {/* Document type selector */}
+                <div className="absolute top-4 right-4 flex space-x-2">
+                  <Button
+                    size="sm"
+                    variant={documentType === "auto" ? "default" : "outline"}
+                    className={documentType === "auto" ? "bg-blue-600" : "bg-black/60 text-white border-gray-600"}
+                    onClick={() => changeDocumentType("auto")}
+                  >
+                    Auto
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={documentType === "a4" ? "default" : "outline"}
+                    className={documentType === "a4" ? "bg-blue-600" : "bg-black/60 text-white border-gray-600"}
+                    onClick={() => changeDocumentType("a4")}
+                  >
+                    A4
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={documentType === "id" ? "default" : "outline"}
+                    className={documentType === "id" ? "bg-blue-600" : "bg-black/60 text-white border-gray-600"}
+                    onClick={() => changeDocumentType("id")}
+                  >
+                    ID
+                  </Button>
+                </div>
+
+                {/* Right side controls */}
+                <div className="absolute bottom-24 right-4 flex flex-col space-y-2">
+                  <button
+                    className="h-12 w-12 rounded-full bg-black/60 flex items-center justify-center text-white hover:bg-black/80 transition-colors"
+                    onClick={toggleCamera}
+                  >
+                    <FlipHorizontal className="h-6 w-6" />
+                  </button>
+
+                  <button
+                    className={cn(
+                      "h-12 w-12 rounded-full flex items-center justify-center text-white transition-colors",
+                      flashActive ? "bg-yellow-500/80" : "bg-black/60 hover:bg-black/80",
+                    )}
+                    onClick={toggleFlash}
+                  >
+                    <Lightbulb className="h-6 w-6" />
+                  </button>
+
+                  <button
+                    className="h-12 w-12 rounded-full bg-black/60 flex items-center justify-center text-white hover:bg-black/80 transition-colors"
+                    onClick={() => handleZoom("in")}
+                  >
+                    <ZoomIn className="h-6 w-6" />
+                  </button>
+
+                  <button
+                    className="h-12 w-12 rounded-full bg-black/60 flex items-center justify-center text-white hover:bg-black/80 transition-colors"
+                    onClick={() => handleZoom("out")}
+                  >
+                    <ZoomOut className="h-6 w-6" />
+                  </button>
+                </div>
+
+                {/* Confidence indicator */}
+                {detectionConfidence > 0 && (
+                  <div className="absolute bottom-24 left-4 right-24 flex flex-col">
+                    <div className="flex justify-between text-xs text-white mb-1">
+                      <span>Estabilidade</span>
+                      <span>{detectionConfidence}%</span>
+                    </div>
+                    <Progress
+                      value={detectionConfidence}
+                      className="h-1 bg-gray-700"
+                      indicatorClassName={cn(
+                        detectionConfidence < 30
+                          ? "bg-red-500"
+                          : detectionConfidence < 70
+                            ? "bg-yellow-500"
+                            : "bg-green-500",
+                      )}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Bottom controls */}
+          <div className="p-4 bg-black flex justify-center">
+            <Button
+              size="lg"
+              className={cn(
+                "rounded-full h-16 w-16 p-0 flex items-center justify-center",
+                documentDetected ? "bg-green-500 hover:bg-green-600" : "bg-blue-500 hover:bg-blue-600",
+              )}
+              disabled={isCapturing || cameraPermission !== "granted"}
+              onClick={capturePhoto}
+            >
+              {documentDetected ? <Check className="h-8 w-8" /> : <Camera className="h-8 w-8" />}
+            </Button>
+          </div>
+
+          {/* Tips */}
+          <div className="p-4 bg-black text-white">
+            <div className="bg-gray-800/80 rounded-lg p-3 text-sm max-w-md mx-auto">
+              <h3 className="font-medium text-white mb-2">Dicas:</h3>
+              <ul className="space-y-1 list-disc pl-5 text-gray-300">
+                <li>Posicione o documento dentro da área demarcada</li>
+                <li>Certifique-se de que há boa iluminação</li>
+                <li>Mantenha a câmera estável durante a captura</li>
+                <li>Selecione o tipo de documento para melhor detecção</li>
+              </ul>
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
+      )}
+    </>
   )
 }
 

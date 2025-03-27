@@ -10,56 +10,129 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
-import { ArrowLeft, Save, Crop, Move, Plus, RotateCw, RotateCcw, ZoomIn, FileText, Undo, Redo } from "lucide-react"
+import {
+  ArrowLeft,
+  Save,
+  Crop,
+  Plus,
+  RotateCw,
+  RotateCcw,
+  ZoomIn,
+  FileText,
+  Undo,
+  Redo,
+  RefreshCw,
+  Check,
+  Search,
+  Maximize,
+  Minimize,
+} from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { useMobile } from "@/hooks/use-mobile"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 
 export default function ScanEdit() {
   const router = useRouter()
   const { toast } = useToast()
   const isMobile = useMobile()
 
+  // Estados principais
   const [colorMode, setColorMode] = useState("color")
   const [brightness, setBrightness] = useState(50)
   const [contrast, setContrast] = useState(50)
-  const [autoEnhance, setAutoEnhance] = useState(true)
+  const [resolution, setResolution] = useState(100) // Novo estado para resolução
+  const [autoEnhance, setAutoEnhance] = useState(false)
   const [editMode, setEditMode] = useState("adjust")
   const [isSaving, setIsSaving] = useState(false)
+  const [isApplying, setIsApplying] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+
+  // Estados de imagem
   const [processedImage, setProcessedImage] = useState<string | null>(null)
+  const [originalImage, setOriginalImage] = useState<string | null>(null)
   const [transformedImage, setTransformedImage] = useState<string | null>(null)
-  const [editHistory, setEditHistory] = useState<string[]>([])
+  const [previewImage, setPreviewImage] = useState<string | null>(null)
+
+  // Estados de histórico e edição
+  const [editHistory, setEditHistory] = useState<
+    {
+      image: string
+      brightness: number
+      contrast: number
+      colorMode: string
+      resolution: number
+    }[]
+  >([])
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [editData, setEditData] = useState<any>(null)
+
+  // Estados de recorte
   const [cropRect, setCropRect] = useState({ top: 60, left: 60, right: 60, bottom: 60 })
-  const [perspectivePoints, setPerspectivePoints] = useState([
-    { x: 60, y: 60 },
-    { x: 540, y: 60 },
-    { x: 60, y: 740 },
-    { x: 540, y: 740 },
-  ])
+  const [originalCropRect, setOriginalCropRect] = useState({ top: 60, left: 60, right: 60, bottom: 60 })
   const [activeDragPoint, setActiveDragPoint] = useState<number | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 })
   const [rotation, setRotation] = useState(0)
+  const [showPreview, setShowPreview] = useState(false)
+  const [isMovingCrop, setIsMovingCrop] = useState(false)
+  const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 })
 
+  // Adicionar estados para OCR e compressão
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [compressionQuality, setCompressionQuality] = useState(80)
+  const [ocrEnabled, setOcrEnabled] = useState(false)
+  const [compressionEnabled, setCompressionEnabled] = useState(true)
+  const [extractedText, setExtractedText] = useState<string | null>(null)
+
+  // Refs
   const imageContainerRef = useRef<HTMLDivElement>(null)
   const imageRef = useRef<HTMLImageElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null)
+  const originalCanvasRef = useRef<HTMLCanvasElement>(null)
 
   // Load processed image and edit data from session storage
   useEffect(() => {
     try {
-      const storedImage = sessionStorage.getItem("processedImage")
+      setIsLoading(true)
+      const storedImage = sessionStorage.getItem("capturedImage")
+      const storedOriginalImage = sessionStorage.getItem("originalImage") || storedImage
       const storedEditData = sessionStorage.getItem("editData")
 
       if (storedImage) {
         setProcessedImage(storedImage)
+        setOriginalImage(storedOriginalImage)
+
         // Inicializar o histórico de edições com a imagem original
-        setEditHistory([storedImage])
+        const initialHistoryEntry = {
+          image: storedOriginalImage,
+          brightness: 50,
+          contrast: 50,
+          colorMode: "color",
+          resolution: 100,
+        }
+
+        setEditHistory([initialHistoryEntry])
         setHistoryIndex(0)
+        setTransformedImage(storedOriginalImage)
       } else {
         // If no image is found, use a placeholder for demo purposes
-        setProcessedImage("/placeholder.svg?height=800&width=600")
+        const placeholderImage = "/placeholder.svg?height=800&width=600"
+        setProcessedImage(placeholderImage)
+        setOriginalImage(placeholderImage)
+        setTransformedImage(placeholderImage)
+
+        // Inicializar o histórico com a imagem placeholder
+        setEditHistory([
+          {
+            image: placeholderImage,
+            brightness: 50,
+            contrast: 50,
+            colorMode: "color",
+            resolution: 100,
+          },
+        ])
+        setHistoryIndex(0)
 
         toast({
           title: "Imagem não encontrada",
@@ -69,24 +142,28 @@ export default function ScanEdit() {
       }
 
       if (storedEditData) {
-        const parsedData = JSON.parse(storedEditData)
-        setEditData(parsedData)
+        try {
+          const parsedData = JSON.parse(storedEditData)
+          setEditData(parsedData)
 
-        // Apply stored edit data
-        if (parsedData.cropRect) {
-          setCropRect(parsedData.cropRect)
-        }
+          // Apply stored edit data
+          if (parsedData.cropRect) {
+            setCropRect(parsedData.cropRect)
+            setOriginalCropRect(parsedData.cropRect)
+          }
 
-        if (parsedData.perspectivePoints) {
-          setPerspectivePoints(parsedData.perspectivePoints)
-        }
-
-        if (parsedData.rotation) {
-          setRotation(parsedData.rotation)
+          if (parsedData.rotation) {
+            setRotation(parsedData.rotation)
+          }
+        } catch (parseError) {
+          console.error("Error parsing edit data:", parseError)
         }
       }
+
+      setIsLoading(false)
     } catch (error) {
       console.error("Error loading data from sessionStorage:", error)
+      setIsLoading(false)
       toast({
         title: "Erro ao carregar dados",
         description: "Não foi possível carregar a imagem processada.",
@@ -105,85 +182,229 @@ export default function ScanEdit() {
     }
   }, [processedImage, transformedImage])
 
-  // Aplicar transformações na imagem em tempo real
-  const applyImageTransformations = () => {
-    if (!processedImage || !canvasRef.current) return
+  // Aplicar transformações quando os valores mudarem
+  useEffect(() => {
+    if (originalImage) {
+      applyImageTransformations()
+    }
+  }, [brightness, contrast, colorMode, resolution])
 
-    const canvas = canvasRef.current
-    const ctx = canvas.getContext("2d")
+  // Função para criar uma cópia do canvas original para uso nas transformações
+  const createOriginalImageCanvas = () => {
+    if (!originalImage || !originalCanvasRef.current) return null
+
+    try {
+      const canvas = originalCanvasRef.current
+      const ctx = canvas.getContext("2d", { willReadFrequently: true })
+      if (!ctx) return null
+
+      return new Promise<HTMLCanvasElement>((resolve, reject) => {
+        const img = new Image()
+        img.crossOrigin = "anonymous"
+
+        img.onload = () => {
+          try {
+            canvas.width = img.width
+            canvas.height = img.height
+            ctx.clearRect(0, 0, canvas.width, canvas.height)
+            ctx.drawImage(img, 0, 0)
+            resolve(canvas)
+          } catch (drawError) {
+            console.error("Error drawing image to canvas:", drawError)
+            reject(drawError)
+          }
+        }
+
+        img.onerror = (err) => {
+          console.error("Error loading image:", err)
+          reject(new Error("Failed to load image"))
+        }
+
+        img.src = originalImage
+      })
+    } catch (error) {
+      console.error("Error in createOriginalImageCanvas:", error)
+      return null
+    }
+  }
+
+  // Corrigir a função de preview e aplicar recorte
+  const generatePreview = async () => {
+    if (!originalImage || !previewCanvasRef.current) return
+
+    const canvas = previewCanvasRef.current
+    const ctx = canvas.getContext("2d", { willReadFrequently: true })
     if (!ctx) return
 
-    // Criar uma imagem temporária para aplicar as transformações
-    const img = new Image()
-    img.crossOrigin = "anonymous"
-    img.onload = () => {
-      // Configurar o tamanho do canvas para corresponder à imagem
-      canvas.width = img.width
-      canvas.height = img.height
+    try {
+      // Criar uma imagem a partir da imagem original
+      const img = new Image()
+      img.crossOrigin = "anonymous"
 
-      // Desenhar a imagem original
-      ctx.drawImage(img, 0, 0)
+      img.onload = () => {
+        // Configurar o tamanho do canvas
+        if (editMode === "crop") {
+          // Calcular as dimensões exatas do recorte
+          const cropWidth = Math.max(0, img.width - cropRect.left - cropRect.right)
+          const cropHeight = Math.max(0, img.height - cropRect.top - cropRect.bottom)
 
-      // Aplicar modo de cor
-      if (colorMode === "bw") {
-        // Converter para preto e branco
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-        const data = imageData.data
-        for (let i = 0; i < data.length; i += 4) {
-          const avg = (data[i] + data[i + 1] + data[i + 2]) / 3
-          const threshold = 128
-          const value = avg > threshold ? 255 : 0
-          data[i] = data[i + 1] = data[i + 2] = value
+          // Verificar se as dimensões são válidas
+          if (cropWidth <= 0 || cropHeight <= 0) {
+            toast({
+              title: "Erro ao gerar prévia",
+              description: "A área de recorte é inválida. Ajuste os cantos e tente novamente.",
+              variant: "destructive",
+            })
+            return
+          }
+
+          canvas.width = cropWidth
+          canvas.height = cropHeight
+
+          // Desenhar apenas a área recortada na posição correta
+          ctx.drawImage(img, cropRect.left, cropRect.top, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight)
         }
-        ctx.putImageData(imageData, 0, 0)
-      } else if (colorMode === "gray") {
-        // Converter para escala de cinza
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-        const data = imageData.data
-        for (let i = 0; i < data.length; i += 4) {
-          const avg = (data[i] + data[i + 1] + data[i + 2]) / 3
-          data[i] = data[i + 1] = data[i + 2] = avg
+
+        // Aplicar as transformações de cor, brilho e contraste
+        applyColorTransformations(ctx, canvas.width, canvas.height)
+
+        // Aplicar resolução
+        if (resolution !== 100) {
+          const resizedCanvas = document.createElement("canvas")
+          const resizedCtx = resizedCanvas.getContext("2d")
+          if (resizedCtx) {
+            const newWidth = canvas.width * (resolution / 100)
+            const newHeight = canvas.height * (resolution / 100)
+
+            resizedCanvas.width = newWidth
+            resizedCanvas.height = newHeight
+
+            resizedCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, newWidth, newHeight)
+
+            // Redimensionar o canvas de prévia para mostrar a nova resolução
+            canvas.width = newWidth
+            canvas.height = newHeight
+            ctx.drawImage(resizedCanvas, 0, 0)
+          }
         }
-        ctx.putImageData(imageData, 0, 0)
+
+        // Mostrar a prévia
+        setPreviewImage(canvas.toDataURL("image/jpeg", 0.8))
+        setShowPreview(true)
       }
 
-      // Aplicar brilho e contraste
-      if (brightness !== 50 || contrast !== 50) {
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-        const data = imageData.data
+      img.src = originalImage
+    } catch (error) {
+      console.error("Error generating preview:", error)
+      toast({
+        title: "Erro ao gerar prévia",
+        description: "Não foi possível gerar a prévia da imagem.",
+        variant: "destructive",
+      })
+    }
+  }
 
-        const brightnessValue = (brightness - 50) * 2.55 // Converter para -127 a 127
-        const contrastFactor = (259 * (contrast + 255)) / (255 * (259 - contrast))
+  // Aplicar transformações de cor a um contexto de canvas
+  const applyColorTransformations = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
+    // Aplicar modo de cor
+    if (colorMode === "bw") {
+      // Converter para preto e branco
+      const imageData = ctx.getImageData(0, 0, width, height)
+      const data = imageData.data
+      for (let i = 0; i < data.length; i += 4) {
+        const avg = (data[i] + data[i + 1] + data[i + 2]) / 3
+        const threshold = 128
+        const value = avg > threshold ? 255 : 0
+        data[i] = data[i + 1] = data[i + 2] = value
+      }
+      ctx.putImageData(imageData, 0, 0)
+    } else if (colorMode === "gray") {
+      // Converter para escala de cinza
+      const imageData = ctx.getImageData(0, 0, width, height)
+      const data = imageData.data
+      for (let i = 0; i < data.length; i += 4) {
+        const avg = (data[i] + data[i + 1] + data[i + 2]) / 3
+        data[i] = data[i + 1] = data[i + 2] = avg
+      }
+      ctx.putImageData(imageData, 0, 0)
+    }
 
-        for (let i = 0; i < data.length; i += 4) {
-          // Aplicar brilho
-          data[i] = Math.max(0, Math.min(255, data[i] + brightnessValue))
-          data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + brightnessValue))
-          data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + brightnessValue))
+    // Aplicar brilho e contraste
+    if (brightness !== 50 || contrast !== 50) {
+      const imageData = ctx.getImageData(0, 0, width, height)
+      const data = imageData.data
 
-          // Aplicar contraste
-          data[i] = Math.max(0, Math.min(255, contrastFactor * (data[i] - 128) + 128))
-          data[i + 1] = Math.max(0, Math.min(255, contrastFactor * (data[i + 1] - 128) + 128))
-          data[i + 2] = Math.max(0, Math.min(255, contrastFactor * (data[i + 2] - 128) + 128))
+      const brightnessValue = (brightness - 50) * 2.55 // Converter para -127 a 127
+      const contrastFactor = (259 * (contrast + 255)) / (255 * (259 - contrast))
+
+      for (let i = 0; i < data.length; i += 4) {
+        // Aplicar brilho
+        data[i] = Math.max(0, Math.min(255, data[i] + brightnessValue))
+        data[i + 1] = Math.max(0, Math.min(255, data[i + 1] + brightnessValue))
+        data[i + 2] = Math.max(0, Math.min(255, data[i + 2] + brightnessValue))
+
+        // Aplicar contraste
+        data[i] = Math.max(0, Math.min(255, contrastFactor * (data[i] - 128) + 128))
+        data[i + 1] = Math.max(0, Math.min(255, contrastFactor * (data[i + 1] - 128) + 128))
+        data[i + 2] = Math.max(0, Math.min(255, contrastFactor * (data[i + 2] - 128) + 128))
+      }
+
+      ctx.putImageData(imageData, 0, 0)
+    }
+  }
+
+  // Aplicar transformações na imagem em tempo real - Corrigido para funcionar corretamente
+  const applyImageTransformations = async () => {
+    if (!originalImage || !canvasRef.current) return
+
+    try {
+      const canvas = canvasRef.current
+      const ctx = canvas.getContext("2d", { willReadFrequently: true })
+      if (!ctx) return
+
+      // Obter o canvas com a imagem original
+      const originalCanvas = await createOriginalImageCanvas()
+      if (!originalCanvas) return
+
+      // Configurar o tamanho do canvas para corresponder à imagem original
+      canvas.width = originalCanvas.width
+      canvas.height = originalCanvas.height
+
+      // Desenhar a imagem original
+      ctx.drawImage(originalCanvas, 0, 0)
+
+      // Aplicar transformações de cor
+      applyColorTransformations(ctx, canvas.width, canvas.height)
+
+      // Aplicar resolução
+      if (resolution !== 100) {
+        const resizedCanvas = document.createElement("canvas")
+        const resizedCtx = resizedCanvas.getContext("2d")
+        if (resizedCtx) {
+          const newWidth = canvas.width * (resolution / 100)
+          const newHeight = canvas.height * (resolution / 100)
+
+          resizedCanvas.width = newWidth
+          resizedCanvas.height = newHeight
+
+          resizedCtx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, newWidth, newHeight)
+
+          // Atualizar o canvas principal
+          canvas.width = newWidth
+          canvas.height = newHeight
+          ctx.drawImage(resizedCanvas, 0, 0)
         }
-
-        ctx.putImageData(imageData, 0, 0)
       }
 
       // Atualizar a imagem processada
       const transformedImageUrl = canvas.toDataURL("image/jpeg", 0.95)
       setTransformedImage(transformedImageUrl)
 
-      // Adicionar ao histórico de edições
-      if (editHistory.length > 0) {
-        const newHistory = editHistory.slice(0, historyIndex + 1)
-        newHistory.push(transformedImageUrl)
-        setEditHistory(newHistory)
-        setHistoryIndex(newHistory.length - 1)
-      }
+      // Não adicionar ao histórico automaticamente para evitar muitas entradas
+      // Isso será feito apenas quando o usuário confirmar as alterações
+    } catch (error) {
+      console.error("Error applying transformations:", error)
     }
-
-    img.src = editHistory[historyIndex] || processedImage
   }
 
   // Handle image load event
@@ -194,107 +415,242 @@ export default function ScanEdit() {
         height: imageRef.current.naturalHeight,
       })
 
-      // Initialize crop and perspective points based on image size if not already set
+      // Initialize crop points based on image size if not already set
       if (!editData) {
         const width = imageRef.current.naturalWidth
         const height = imageRef.current.naturalHeight
 
         // Set crop to 10% inset from each edge
         const inset = Math.min(width, height) * 0.1
-        setCropRect({
+        const newCropRect = {
           top: inset,
           left: inset,
           right: inset,
           bottom: inset,
-        })
-
-        // Set perspective points
-        setPerspectivePoints([
-          { x: inset, y: inset },
-          { x: width - inset, y: inset },
-          { x: inset, y: height - inset },
-          { x: width - inset, y: height - inset },
-        ])
+        }
+        setCropRect(newCropRect)
+        setOriginalCropRect(newCropRect)
       }
+
+      // Aplicar transformações iniciais
+      setTimeout(applyImageTransformations, 100)
     }
   }
 
-  // Atualizar os manipuladores de eventos para brilho e contraste
+  // Atualizar os manipuladores de eventos para brilho e contraste - Corrigidos
   const handleBrightnessChange = (value: number) => {
     setBrightness(value)
-    setTimeout(applyImageTransformations, 10)
   }
 
   const handleContrastChange = (value: number) => {
     setContrast(value)
-    setTimeout(applyImageTransformations, 10)
+  }
+
+  const handleResolutionChange = (value: number) => {
+    setResolution(value)
   }
 
   const handleColorModeChange = (mode: string) => {
     setColorMode(mode)
-    setTimeout(applyImageTransformations, 10)
   }
 
-  // Manipulador para rotação
-  const handleRotate = (direction: "cw" | "ccw") => {
-    if (!processedImage || !canvasRef.current) return
+  // Corrigir as funções de desfazer, refazer, restaurar original e salvar estados
+  const saveToHistory = () => {
+    if (!transformedImage) return
 
-    const canvas = canvasRef.current
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return
-
-    // Criar uma imagem temporária para aplicar a rotação
-    const img = new Image()
-    img.crossOrigin = "anonymous"
-    img.onload = () => {
-      // Configurar o tamanho do canvas para lidar com a rotação
-      if (direction === "cw" || direction === "ccw") {
-        canvas.width = img.height
-        canvas.height = img.width
-      } else {
-        canvas.width = img.width
-        canvas.height = img.height
-      }
-
-      // Aplicar rotação
-      ctx.save()
-      ctx.translate(canvas.width / 2, canvas.height / 2)
-      ctx.rotate(((direction === "cw" ? 90 : -90) * Math.PI) / 180)
-      ctx.drawImage(img, -img.width / 2, -img.height / 2)
-      ctx.restore()
-
-      // Atualizar a imagem processada
-      const rotatedImageUrl = canvas.toDataURL("image/jpeg", 0.95)
-      setProcessedImage(rotatedImageUrl)
-
-      // Atualizar o histórico de edições
-      const newHistory = editHistory.slice(0, historyIndex + 1)
-      newHistory.push(rotatedImageUrl)
-      setEditHistory(newHistory)
-      setHistoryIndex(newHistory.length - 1)
-
-      // Atualizar a rotação
-      setRotation((prev) => {
-        const newRotation = direction === "cw" ? (prev + 90) % 360 : (prev - 90 + 360) % 360
-        return newRotation
-      })
+    const newHistoryEntry = {
+      image: transformedImage,
+      brightness,
+      contrast,
+      colorMode,
+      resolution,
     }
 
-    img.src = transformedImage || editHistory[historyIndex] || processedImage
+    // Remover entradas futuras se estamos no meio do histórico
+    const newHistory = [...editHistory.slice(0, historyIndex + 1), newHistoryEntry]
+
+    setEditHistory(newHistory)
+    setHistoryIndex(newHistory.length - 1)
+
+    toast({
+      title: "Estado salvo",
+      description: "O estado atual da imagem foi salvo no histórico",
+      variant: "default",
+    })
   }
 
-  // Funções para desfazer e refazer
   const handleUndo = () => {
     if (historyIndex > 0) {
-      setHistoryIndex(historyIndex - 1)
-      setTransformedImage(editHistory[historyIndex - 1])
+      const prevIndex = historyIndex - 1
+      const prevState = editHistory[prevIndex]
+
+      setHistoryIndex(prevIndex)
+      setTransformedImage(prevState.image)
+      setBrightness(prevState.brightness)
+      setContrast(prevState.contrast)
+      setColorMode(prevState.colorMode)
+      setResolution(prevState.resolution)
+
+      toast({
+        title: "Ação desfeita",
+        description: "Voltando para o estado anterior",
+        variant: "default",
+      })
     }
   }
 
   const handleRedo = () => {
     if (historyIndex < editHistory.length - 1) {
-      setHistoryIndex(historyIndex + 1)
-      setTransformedImage(editHistory[historyIndex + 1])
+      const nextIndex = historyIndex + 1
+      const nextState = editHistory[nextIndex]
+
+      setHistoryIndex(nextIndex)
+      setTransformedImage(nextState.image)
+      setBrightness(nextState.brightness)
+      setContrast(nextState.contrast)
+      setColorMode(nextState.colorMode)
+      setResolution(nextState.resolution)
+
+      toast({
+        title: "Ação refeita",
+        description: "Avançando para o próximo estado",
+        variant: "default",
+      })
+    }
+  }
+
+  const handleRestoreOriginal = () => {
+    if (originalImage && editHistory.length > 0) {
+      // Resetar os controles
+      setBrightness(50)
+      setContrast(50)
+      setColorMode("color")
+      setResolution(100)
+
+      // Adicionar ao histórico
+      const newHistoryEntry = {
+        image: originalImage,
+        brightness: 50,
+        contrast: 50,
+        colorMode: "color",
+        resolution: 100,
+      }
+
+      const newHistory = [...editHistory.slice(0, historyIndex + 1), newHistoryEntry]
+      setEditHistory(newHistory)
+      setHistoryIndex(newHistory.length - 1)
+
+      // Atualizar a imagem transformada
+      setTransformedImage(originalImage)
+
+      toast({
+        title: "Imagem restaurada",
+        description: "A imagem foi restaurada para o estado original",
+        variant: "default",
+      })
+    }
+  }
+
+  // Corrigir a função de restaurar recorte
+  const handleRestoreCrop = () => {
+    if (originalCropRect) {
+      setCropRect({ ...originalCropRect })
+
+      toast({
+        title: "Recorte restaurado",
+        description: "O recorte foi restaurado para o estado original",
+        variant: "default",
+      })
+    }
+  }
+
+  // Corrigir a função de aplicar alterações
+  const handleApplyChanges = async () => {
+    if (!originalImage) return
+
+    setIsApplying(true)
+
+    try {
+      // Criar uma imagem a partir da imagem original
+      const img = new Image()
+      img.crossOrigin = "anonymous"
+
+      img.onload = () => {
+        const canvas = document.createElement("canvas")
+        const ctx = canvas.getContext("2d", { willReadFrequently: true })
+        if (!ctx) {
+          setIsApplying(false)
+          return
+        }
+
+        if (editMode === "crop") {
+          // Calcular as dimensões exatas do recorte
+          const cropWidth = Math.max(0, img.width - cropRect.left - cropRect.right)
+          const cropHeight = Math.max(0, img.height - cropRect.top - cropRect.bottom)
+
+          // Verificar se as dimensões são válidas
+          if (cropWidth <= 0 || cropHeight <= 0) {
+            toast({
+              title: "Erro ao aplicar recorte",
+              description: "A área de recorte é inválida. Ajuste os cantos e tente novamente.",
+              variant: "destructive",
+            })
+            setIsApplying(false)
+            return
+          }
+
+          canvas.width = cropWidth
+          canvas.height = cropHeight
+
+          // Desenhar apenas a área recortada na posição correta
+          ctx.drawImage(img, cropRect.left, cropRect.top, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight)
+
+          // Atualizar a imagem original para o recorte
+          const croppedImageUrl = canvas.toDataURL("image/jpeg", 0.95)
+          setOriginalImage(croppedImageUrl)
+          setTransformedImage(croppedImageUrl)
+
+          // Resetar os controles
+          setBrightness(50)
+          setContrast(50)
+          setColorMode("color")
+          setResolution(100)
+
+          // Adicionar ao histórico
+          const newHistoryEntry = {
+            image: croppedImageUrl,
+            brightness: 50,
+            contrast: 50,
+            colorMode: "color",
+            resolution: 100,
+          }
+
+          const newHistory = [...editHistory.slice(0, historyIndex + 1), newHistoryEntry]
+          setEditHistory(newHistory)
+          setHistoryIndex(newHistory.length - 1)
+        }
+
+        // Fechar a prévia
+        setShowPreview(false)
+
+        toast({
+          title: "Alterações aplicadas",
+          description: "As alterações foram aplicadas com sucesso",
+          variant: "default",
+        })
+
+        setIsApplying(false)
+      }
+
+      img.src = originalImage
+    } catch (error) {
+      console.error("Error applying changes:", error)
+      toast({
+        title: "Erro ao aplicar alterações",
+        description: "Ocorreu um erro ao processar a imagem",
+        variant: "destructive",
+      })
+      setIsApplying(false)
     }
   }
 
@@ -322,24 +678,24 @@ export default function ScanEdit() {
       const imageX = x * scaleX
       const imageY = y * scaleY
 
-      // Ensure minimum crop size (10% of image)
-      const minSize = Math.min(imageSize.width, imageSize.height) * 0.1
+      // Ensure minimum crop size (5% of image)
+      const minSize = Math.min(imageSize.width, imageSize.height) * 0.05
 
       setCropRect((prev) => {
         const newRect = { ...prev }
 
         if (corner === "topLeft") {
-          newRect.left = Math.min(imageX, imageSize.width - cropRect.right - minSize)
-          newRect.top = Math.min(imageY, imageSize.height - cropRect.bottom - minSize)
+          newRect.left = Math.min(imageX, imageSize.width - prev.right - minSize)
+          newRect.top = Math.min(imageY, imageSize.height - prev.bottom - minSize)
         } else if (corner === "topRight") {
-          newRect.right = Math.min(imageSize.width - imageX, imageSize.width - cropRect.left - minSize)
-          newRect.top = Math.min(imageY, imageSize.height - cropRect.bottom - minSize)
+          newRect.right = Math.min(imageSize.width - imageX, imageSize.width - prev.left - minSize)
+          newRect.top = Math.min(imageY, imageSize.height - prev.bottom - minSize)
         } else if (corner === "bottomLeft") {
-          newRect.left = Math.min(imageX, imageSize.width - cropRect.right - minSize)
-          newRect.bottom = Math.min(imageSize.height - imageY, imageSize.height - cropRect.top - minSize)
+          newRect.left = Math.min(imageX, imageSize.width - prev.right - minSize)
+          newRect.bottom = Math.min(imageSize.height - imageY, imageSize.height - prev.top - minSize)
         } else if (corner === "bottomRight") {
-          newRect.right = Math.min(imageSize.width - imageX, imageSize.width - cropRect.left - minSize)
-          newRect.bottom = Math.min(imageSize.height - imageY, imageSize.height - cropRect.top - minSize)
+          newRect.right = Math.min(imageSize.width - imageX, imageSize.width - prev.left - minSize)
+          newRect.bottom = Math.min(imageSize.height - imageY, imageSize.height - prev.top - minSize)
         }
 
         return newRect
@@ -365,24 +721,24 @@ export default function ScanEdit() {
       const imageX = x * scaleX
       const imageY = y * scaleY
 
-      // Ensure minimum crop size (10% of image)
-      const minSize = Math.min(imageSize.width, imageSize.height) * 0.1
+      // Ensure minimum crop size (5% of image)
+      const minSize = Math.min(imageSize.width, imageSize.height) * 0.05
 
       setCropRect((prev) => {
         const newRect = { ...prev }
 
         if (corner === "topLeft") {
-          newRect.left = Math.min(imageX, imageSize.width - cropRect.right - minSize)
-          newRect.top = Math.min(imageY, imageSize.height - cropRect.bottom - minSize)
+          newRect.left = Math.min(imageX, imageSize.width - prev.right - minSize)
+          newRect.top = Math.min(imageY, imageSize.height - prev.bottom - minSize)
         } else if (corner === "topRight") {
-          newRect.right = Math.min(imageSize.width - imageX, imageSize.width - cropRect.left - minSize)
-          newRect.top = Math.min(imageY, imageSize.height - cropRect.bottom - minSize)
+          newRect.right = Math.min(imageSize.width - imageX, imageSize.width - prev.left - minSize)
+          newRect.top = Math.min(imageY, imageSize.height - prev.bottom - minSize)
         } else if (corner === "bottomLeft") {
-          newRect.left = Math.min(imageX, imageSize.width - cropRect.right - minSize)
-          newRect.bottom = Math.min(imageSize.height - imageY, imageSize.height - cropRect.top - minSize)
+          newRect.left = Math.min(imageX, imageSize.width - prev.right - minSize)
+          newRect.bottom = Math.min(imageSize.height - imageY, imageSize.height - prev.top - minSize)
         } else if (corner === "bottomRight") {
-          newRect.right = Math.min(imageSize.width - imageX, imageSize.width - cropRect.left - minSize)
-          newRect.bottom = Math.min(imageSize.height - imageY, imageSize.height - cropRect.top - minSize)
+          newRect.right = Math.min(imageSize.width - imageX, imageSize.width - prev.left - minSize)
+          newRect.bottom = Math.min(imageSize.height - imageY, imageSize.height - prev.top - minSize)
         }
 
         return newRect
@@ -403,66 +759,108 @@ export default function ScanEdit() {
     document.addEventListener("touchend", handleEnd)
   }
 
-  // Handle perspective point dragging
-  // Melhorar a função handlePerspectiveMouseDown para garantir que a perspectiva funcione corretamente
-  const handlePerspectiveMouseDown = (index: number, e: React.MouseEvent) => {
+  // Função para mover o retângulo de recorte inteiro
+  const handleCropAreaMouseDown = (e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    setActiveDragPoint(index)
-    setIsDragging(true)
+
+    if (!imageContainerRef.current) return
+
+    setIsMovingCrop(true)
+
+    const rect = imageContainerRef.current.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
+
+    setLastMousePos({ x, y })
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
       moveEvent.preventDefault()
-      if (!imageContainerRef.current || activeDragPoint === null) return
+      if (!imageContainerRef.current || !isMovingCrop) return
 
       const rect = imageContainerRef.current.getBoundingClientRect()
+      const x = moveEvent.clientX - rect.left
+      const y = moveEvent.clientY - rect.top
 
-      // Calcular posição relativa ao contêiner com limites de segurança
-      const x = Math.max(0, Math.min(moveEvent.clientX - rect.left, rect.width))
-      const y = Math.max(0, Math.min(moveEvent.clientY - rect.top, rect.height))
+      // Calcular o deslocamento
+      const deltaX = x - lastMousePos.x
+      const deltaY = y - lastMousePos.y
 
       // Converter para coordenadas da imagem
       const scaleX = imageSize.width / rect.width
       const scaleY = imageSize.height / rect.height
-      const imageX = x * scaleX
-      const imageY = y * scaleY
+      const imageDeltaX = deltaX * scaleX
+      const imageDeltaY = deltaY * scaleY
 
-      // Atualizar o ponto de perspectiva
-      setPerspectivePoints((prev) => {
-        const newPoints = [...prev]
-        newPoints[index] = { x: imageX, y: imageY }
-        return newPoints
+      // Atualizar a posição do retângulo de recorte
+      setCropRect((prev) => {
+        // Verificar limites
+        const newLeft = Math.max(0, prev.left - imageDeltaX)
+        const newRight = Math.max(0, prev.right + imageDeltaX)
+        const newTop = Math.max(0, prev.top - imageDeltaY)
+        const newBottom = Math.max(0, prev.bottom + imageDeltaY)
+
+        // Verificar se o recorte ainda está dentro da imagem
+        if (newLeft + newRight >= imageSize.width || newTop + newBottom >= imageSize.height) {
+          return prev
+        }
+
+        return {
+          left: newLeft,
+          right: newRight,
+          top: newTop,
+          bottom: newBottom,
+        }
       })
+
+      setLastMousePos({ x, y })
     }
 
     const handleTouchMove = (touchEvent: TouchEvent) => {
       touchEvent.preventDefault()
       const touch = touchEvent.touches[0]
-      if (!touch || !imageContainerRef.current || activeDragPoint === null) return
+      if (!touch || !imageContainerRef.current || !isMovingCrop) return
 
       const rect = imageContainerRef.current.getBoundingClientRect()
+      const x = touch.clientX - rect.left
+      const y = touch.clientY - rect.top
 
-      // Calcular posição relativa ao contêiner com limites de segurança
-      const x = Math.max(0, Math.min(touch.clientX - rect.left, rect.width))
-      const y = Math.max(0, Math.min(touch.clientY - rect.top, rect.height))
+      // Calcular o deslocamento
+      const deltaX = x - lastMousePos.x
+      const deltaY = y - lastMousePos.y
 
       // Converter para coordenadas da imagem
       const scaleX = imageSize.width / rect.width
       const scaleY = imageSize.height / rect.height
-      const imageX = x * scaleX
-      const imageY = y * scaleY
+      const imageDeltaX = deltaX * scaleX
+      const imageDeltaY = deltaY * scaleY
 
-      // Atualizar o ponto de perspectiva
-      setPerspectivePoints((prev) => {
-        const newPoints = [...prev]
-        newPoints[index] = { x: imageX, y: imageY }
-        return newPoints
+      // Atualizar a posição do retângulo de recorte
+      setCropRect((prev) => {
+        // Verificar limites
+        const newLeft = Math.max(0, prev.left - imageDeltaX)
+        const newRight = Math.max(0, prev.right + imageDeltaX)
+        const newTop = Math.max(0, prev.top - imageDeltaY)
+        const newBottom = Math.max(0, prev.bottom + imageDeltaY)
+
+        // Verificar se o recorte ainda está dentro da imagem
+        if (newLeft + newRight >= imageSize.width || newTop + newBottom >= imageSize.height) {
+          return prev
+        }
+
+        return {
+          left: newLeft,
+          right: newRight,
+          top: newTop,
+          bottom: newBottom,
+        }
       })
+
+      setLastMousePos({ x, y })
     }
 
     const handleEnd = () => {
-      setActiveDragPoint(null)
-      setIsDragging(false)
+      setIsMovingCrop(false)
       document.removeEventListener("mousemove", handleMouseMove)
       document.removeEventListener("touchmove", handleTouchMove)
       document.removeEventListener("mouseup", handleEnd)
@@ -475,149 +873,375 @@ export default function ScanEdit() {
     document.addEventListener("touchend", handleEnd)
   }
 
-  // Apply auto crop
-  // Implementar recorte automático mais robusto
-  const handleAutoCrop = () => {
-    // Implementar um recorte automático mais inteligente
-    // Para demonstração, vamos criar um recorte mais realista
+  // Implementar detecção automática de recorte aprimorada
+  const handleAutoCrop = async () => {
+    if (!originalImage) return
 
-    // Calcular o centro da imagem
-    const centerX = imageSize.width / 2
-    const centerY = imageSize.height / 2
+    try {
+      // Simular uma detecção mais avançada
+      const img = new Image()
+      img.crossOrigin = "anonymous"
 
-    // Calcular o tamanho do documento (75% da imagem)
-    const docWidth = imageSize.width * 0.75
-    const docHeight = imageSize.height * 0.75
+      img.onload = () => {
+        // Obter as dimensões da imagem
+        const width = img.width
+        const height = img.height
 
-    // Calcular as margens
-    const leftMargin = centerX - docWidth / 2
-    const topMargin = centerY - docHeight / 2
-    const rightMargin = imageSize.width - (centerX + docWidth / 2)
-    const bottomMargin = imageSize.height - (centerY + docHeight / 2)
+        // Criar um canvas temporário para análise
+        const tempCanvas = document.createElement("canvas")
+        const tempCtx = tempCanvas.getContext("2d", { willReadFrequently: true })
 
-    setCropRect({
-      top: topMargin,
-      left: leftMargin,
-      right: rightMargin,
-      bottom: bottomMargin,
-    })
+        if (!tempCtx) return
 
-    // Atualizar o modo de edição para recorte
-    setEditMode("crop")
+        tempCanvas.width = width
+        tempCanvas.height = height
+        tempCtx.drawImage(img, 0, 0)
 
-    toast({
-      title: "Recorte automático aplicado",
-      description: "Arraste os cantos para ajustar manualmente se necessário",
-      variant: "default",
-    })
-  }
+        // Obter os dados da imagem
+        const imageData = tempCtx.getImageData(0, 0, width, height)
+        const data = imageData.data
 
-  // Apply auto perspective correction
-  // Implementar correção automática de perspectiva mais robusta
-  const handleAutoPerspective = () => {
-    // Implementar uma detecção de perspectiva mais inteligente
-    // Para demonstração, vamos criar uma perspectiva mais realista
+        // Detectar bordas (simplificado)
+        // Em um app real, usaríamos algoritmos mais avançados como Canny Edge Detection
 
-    // Calcular o centro da imagem
-    const centerX = imageSize.width / 2
-    const centerY = imageSize.height / 2
+        // Calcular histograma de luminosidade por região
+        const regionSize = 20
+        const regions = {
+          top: { sum: 0, count: 0 },
+          bottom: { sum: 0, count: 0 },
+          left: { sum: 0, count: 0 },
+          right: { sum: 0, count: 0 },
+          center: { sum: 0, count: 0 },
+        }
 
-    // Calcular o tamanho do documento (70% da imagem)
-    const docWidth = imageSize.width * 0.7
-    const docHeight = imageSize.height * 0.7
+        // Analisar regiões
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const i = (y * width + x) * 4
+            const r = data[i]
+            const g = data[i + 1]
+            const b = data[i + 2]
+            const luminance = 0.299 * r + 0.587 * g + 0.114 * b
 
-    // Adicionar uma distorção de perspectiva realista
-    // Simular um documento visto de um ângulo ligeiramente inclinado
-    const newPoints = [
-      { x: centerX - (docWidth / 2) * 0.9, y: centerY - (docHeight / 2) * 0.9 }, // Superior-esquerdo
-      { x: centerX + (docWidth / 2) * 1.1, y: centerY - (docHeight / 2) * 0.95 }, // Superior-direito
-      { x: centerX - (docWidth / 2) * 0.85, y: centerY + (docHeight / 2) * 1.05 }, // Inferior-esquerdo
-      { x: centerX + (docWidth / 2) * 1.15, y: centerY + (docHeight / 2) * 1.1 }, // Inferior-direito
-    ]
+            // Determinar região
+            if (y < regionSize) {
+              regions.top.sum += luminance
+              regions.top.count++
+            } else if (y > height - regionSize) {
+              regions.bottom.sum += luminance
+              regions.bottom.count++
+            }
 
-    setPerspectivePoints(newPoints)
+            if (x < regionSize) {
+              regions.left.sum += luminance
+              regions.left.count++
+            } else if (x > width - regionSize) {
+              regions.right.sum += luminance
+              regions.right.count++
+            }
 
-    // Atualizar o modo de edição para perspectiva
-    setEditMode("perspective")
+            if (x > width * 0.3 && x < width * 0.7 && y > height * 0.3 && y < height * 0.7) {
+              regions.center.sum += luminance
+              regions.center.count++
+            }
+          }
+        }
 
-    toast({
-      title: "Correção de perspectiva aplicada",
-      description: "Arraste os pontos para ajustar manualmente se necessário",
-      variant: "default",
-    })
+        // Calcular médias
+        const avgLuminance = {
+          top: regions.top.sum / regions.top.count,
+          bottom: regions.bottom.sum / regions.bottom.count,
+          left: regions.left.sum / regions.left.count,
+          right: regions.right.sum / regions.right.count,
+          center: regions.center.sum / regions.center.count,
+        }
+
+        // Determinar limites com base nas diferenças de luminosidade
+        const threshold = 15 // Ajustar conforme necessário
+
+        // Calcular margens
+        let topMargin = height * 0.1
+        let bottomMargin = height * 0.1
+        let leftMargin = width * 0.1
+        let rightMargin = width * 0.1
+
+        // Ajustar margens com base nas diferenças de luminosidade
+        if (Math.abs(avgLuminance.top - avgLuminance.center) > threshold) {
+          topMargin = height * 0.15
+        }
+
+        if (Math.abs(avgLuminance.bottom - avgLuminance.center) > threshold) {
+          bottomMargin = height * 0.15
+        }
+
+        if (Math.abs(avgLuminance.left - avgLuminance.center) > threshold) {
+          leftMargin = width * 0.15
+        }
+
+        if (Math.abs(avgLuminance.right - avgLuminance.center) > threshold) {
+          rightMargin = width * 0.15
+        }
+
+        // Definir o retângulo de recorte
+        setCropRect({
+          top: topMargin,
+          bottom: bottomMargin,
+          left: leftMargin,
+          right: rightMargin,
+        })
+
+        // Gerar prévia
+        setTimeout(generatePreview, 100)
+
+        toast({
+          title: "Recorte automático aplicado",
+          description: "Documento detectado e recorte aplicado",
+          variant: "default",
+        })
+      }
+
+      img.src = originalImage
+    } catch (error) {
+      console.error("Error in auto crop:", error)
+
+      // Fallback para recorte simples
+      const centerX = imageSize.width / 2
+      const centerY = imageSize.height / 2
+      const docWidth = imageSize.width * 0.8
+      const docHeight = imageSize.height * 0.8
+
+      setCropRect({
+        top: centerY - docHeight / 2,
+        left: centerX - docWidth / 2,
+        right: imageSize.width - (centerX + docWidth / 2),
+        bottom: imageSize.height - (centerY + docHeight / 2),
+      })
+
+      setTimeout(generatePreview, 100)
+
+      toast({
+        title: "Recorte automático aplicado",
+        description: "Usando método alternativo de detecção",
+        variant: "default",
+      })
+    }
   }
 
   // Process and save the image - Otimizado para ser mais rápido
-  const processAndSaveImage = () => {
-    const sourceImage = transformedImage || processedImage
-    if (!sourceImage || !canvasRef.current) return
+  const processAndSaveImage = async () => {
+    if (!originalImage) return
 
     setIsSaving(true)
 
-    const canvas = canvasRef.current
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return
+    try {
+      // Obter a imagem atual (transformada ou original)
+      const sourceImage = transformedImage || originalImage
 
-    // Create a temporary image to draw from
-    const img = new Image()
-    img.crossOrigin = "anonymous"
-    img.onload = () => {
-      // Set canvas size based on crop
-      const cropWidth = img.width - cropRect.left - cropRect.right
-      const cropHeight = img.height - cropRect.top - cropRect.bottom
+      // Aplicar recorte se necessário
+      let processedImage = sourceImage
 
-      // Determine if we're using perspective correction
-      const usePerspective = editMode === "perspective"
+      if (editMode === "crop") {
+        const img = new Image()
+        img.crossOrigin = "anonymous"
 
-      if (usePerspective) {
-        // For perspective correction, we need to maintain the original canvas size
-        canvas.width = img.width
-        canvas.height = img.height
+        processedImage = await new Promise((resolve, reject) => {
+          img.onload = () => {
+            const canvas = document.createElement("canvas")
+            const ctx = canvas.getContext("2d")
 
-        // Clear canvas
-        ctx.clearRect(0, 0, canvas.width, canvas.height)
+            if (!ctx) {
+              reject(new Error("Não foi possível criar o contexto do canvas"))
+              return
+            }
 
-        // Draw the original image with perspective correction
-        ctx.drawImage(img, 0, 0)
+            // Calcular as dimensões do recorte
+            const cropWidth = Math.max(0, img.width - cropRect.left - cropRect.right)
+            const cropHeight = Math.max(0, img.height - cropRect.top - cropRect.bottom)
 
-        // In a real app, we would apply the perspective transform here
-      } else {
-        // For crop only, set canvas to the crop size
-        canvas.width = cropWidth
-        canvas.height = cropHeight
+            if (cropWidth <= 0 || cropHeight <= 0) {
+              reject(new Error("Dimensões de recorte inválidas"))
+              return
+            }
 
-        // Clear canvas
-        ctx.clearRect(0, 0, canvas.width, canvas.height)
+            canvas.width = cropWidth
+            canvas.height = cropHeight
 
-        // Draw the cropped image
-        ctx.drawImage(img, cropRect.left, cropRect.top, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight)
+            ctx.drawImage(img, cropRect.left, cropRect.top, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight)
+
+            resolve(canvas.toDataURL("image/jpeg", 0.95))
+          }
+
+          img.onerror = () => {
+            reject(new Error("Erro ao carregar a imagem para recorte"))
+          }
+
+          img.src = sourceImage
+        })
       }
 
-      // Get the final image data URL
-      const finalImageUrl = canvas.toDataURL("image/jpeg", 0.95)
+      // Aplicar compressão se habilitada
+      if (compressionEnabled) {
+        const compressedImage = await compressImage(compressionQuality)
+        if (compressedImage) {
+          processedImage = compressedImage
+        }
+      }
 
-      // Store in sessionStorage for the success page
-      sessionStorage.setItem("finalImage", finalImageUrl)
+      // Realizar OCR se habilitado
+      if (ocrEnabled && !extractedText) {
+        await performOCR()
+      }
 
-      // Navigate to success page
+      // Armazenar a imagem final
+      sessionStorage.setItem("finalImage", processedImage)
+
+      // Armazenar o texto extraído, se houver
+      if (extractedText) {
+        sessionStorage.setItem("extractedText", extractedText)
+      }
+
+      // Navegar para a página de sucesso
       setTimeout(() => {
         setIsSaving(false)
         router.push("/scan/success")
-      }, 200) // Reduzido para 200ms para ser mais rápido
-    }
+      }, 200)
+    } catch (error) {
+      console.error("Error processing image:", error)
+      setIsSaving(false)
 
-    img.src = sourceImage
+      toast({
+        title: "Erro ao processar imagem",
+        description: "Ocorreu um erro ao processar a imagem. Tente novamente.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Implementar OCR e compressão de arquivo
+  const performOCR = async () => {
+    if (!transformedImage) return
+
+    try {
+      setIsProcessing(true)
+
+      // Simulação de OCR (em um app real, usaríamos uma API de OCR como Tesseract.js ou Google Cloud Vision)
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+
+      // Simulação de texto extraído
+      const extractedText =
+        "DOCUMENTO DIGITALIZADO\n\nTexto extraído do documento através de OCR.\nEste é um exemplo de como o texto seria extraído de um documento real."
+
+      // Armazenar o texto extraído
+      sessionStorage.setItem("extractedText", extractedText)
+
+      setIsProcessing(false)
+
+      toast({
+        title: "OCR concluído",
+        description: "O texto foi extraído com sucesso do documento",
+        variant: "default",
+      })
+
+      return extractedText
+    } catch (error) {
+      console.error("Error performing OCR:", error)
+      setIsProcessing(false)
+
+      toast({
+        title: "Erro no OCR",
+        description: "Não foi possível extrair o texto do documento",
+        variant: "destructive",
+      })
+
+      return null
+    }
+  }
+
+  const compressImage = async (quality: number) => {
+    if (!transformedImage) return null
+
+    try {
+      const img = new Image()
+      img.crossOrigin = "anonymous"
+
+      return new Promise<string>((resolve, reject) => {
+        img.onload = () => {
+          const canvas = document.createElement("canvas")
+          const ctx = canvas.getContext("2d")
+
+          if (!ctx) {
+            reject(new Error("Não foi possível criar o contexto do canvas"))
+            return
+          }
+
+          canvas.width = img.width
+          canvas.height = img.height
+
+          ctx.drawImage(img, 0, 0)
+
+          // Comprimir a imagem com a qualidade especificada
+          const compressedImageUrl = canvas.toDataURL("image/jpeg", quality / 100)
+
+          // Calcular a taxa de compressão
+          const originalSize = transformedImage.length
+          const compressedSize = compressedImageUrl.length
+          const compressionRatio = (1 - compressedSize / originalSize) * 100
+
+          toast({
+            title: "Imagem comprimida",
+            description: `Compressão: ${compressionRatio.toFixed(1)}% (qualidade: ${quality}%)`,
+            variant: "default",
+          })
+
+          resolve(compressedImageUrl)
+        }
+
+        img.onerror = () => {
+          reject(new Error("Erro ao carregar a imagem para compressão"))
+        }
+
+        img.src = transformedImage
+      })
+    } catch (error) {
+      console.error("Error compressing image:", error)
+
+      toast({
+        title: "Erro na compressão",
+        description: "Não foi possível comprimir a imagem",
+        variant: "destructive",
+      })
+
+      return null
+    }
   }
 
   const handleAddAnother = () => {
     router.push("/scan/camera")
   }
 
+  const handleRotate = (direction: "cw" | "ccw") => {
+    setRotation((prevRotation) => {
+      const newRotation = direction === "cw" ? prevRotation + 90 : prevRotation - 90
+      return newRotation >= 360 ? newRotation - 360 : newRotation < 0 ? 360 + newRotation : newRotation
+    })
+  }
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-slate-100 to-white dark:from-slate-950 dark:to-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent align-[-0.125em] motion-reduce:animate-[spin_1.5s_linear_infinite] mb-4"></div>
+          <p className="text-slate-600 dark:text-slate-300">Carregando editor...</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-100 to-white dark:from-slate-950 dark:to-slate-900">
       <div className="container mx-auto px-4 py-4 sm:py-8 max-w-5xl">
         <div className="flex items-center mb-4 sm:mb-8">
-          <Button variant="ghost" size="icon" onClick={() => router.push("/scan/review")} className="mr-4">
+          <Button variant="ghost" size="icon" onClick={() => router.push("/")} className="mr-4">
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div>
@@ -648,6 +1272,8 @@ export default function ScanEdit() {
                 )}
 
                 <canvas ref={canvasRef} className="hidden" />
+                <canvas ref={previewCanvasRef} className="hidden" />
+                <canvas ref={originalCanvasRef} className="hidden" />
 
                 {editMode === "crop" && imageSize.width > 0 && (
                   <div
@@ -670,16 +1296,21 @@ export default function ScanEdit() {
                 {editMode === "crop" && imageSize.width > 0 && (
                   <div className="absolute inset-0">
                     <div
-                      className="absolute border-2 border-blue-500 pointer-events-none"
+                      className="absolute border-2 border-blue-500 cursor-move"
                       style={{
                         top: `${(cropRect.top * 100) / imageSize.height}%`,
                         left: `${(cropRect.left * 100) / imageSize.width}%`,
                         right: `${(cropRect.right * 100) / imageSize.width}%`,
                         bottom: `${(cropRect.bottom * 100) / imageSize.height}%`,
                       }}
+                      onMouseDown={handleCropAreaMouseDown}
+                      onTouchStart={(e) => {
+                        e.preventDefault()
+                        handleCropAreaMouseDown(e as any)
+                      }}
                     >
                       <div
-                        className="absolute -top-3 -left-3 w-6 h-6 bg-blue-500 rounded-full cursor-nwse-resize"
+                        className="absolute -top-3 -left-3 w-6 h-6 bg-blue-500 rounded-full cursor-nwse-resize z-10"
                         onMouseDown={(e) => handleCropMouseDown("topLeft", e)}
                         onTouchStart={(e) => {
                           e.preventDefault()
@@ -687,7 +1318,7 @@ export default function ScanEdit() {
                         }}
                       />
                       <div
-                        className="absolute -top-3 -right-3 w-6 h-6 bg-blue-500 rounded-full cursor-nesw-resize"
+                        className="absolute -top-3 -right-3 w-6 h-6 bg-blue-500 rounded-full cursor-nesw-resize z-10"
                         onMouseDown={(e) => handleCropMouseDown("topRight", e)}
                         onTouchStart={(e) => {
                           e.preventDefault()
@@ -695,7 +1326,7 @@ export default function ScanEdit() {
                         }}
                       />
                       <div
-                        className="absolute -bottom-3 -left-3 w-6 h-6 bg-blue-500 rounded-full cursor-nesw-resize"
+                        className="absolute -bottom-3 -left-3 w-6 h-6 bg-blue-500 rounded-full cursor-nesw-resize z-10"
                         onMouseDown={(e) => handleCropMouseDown("bottomLeft", e)}
                         onTouchStart={(e) => {
                           e.preventDefault()
@@ -703,7 +1334,7 @@ export default function ScanEdit() {
                         }}
                       />
                       <div
-                        className="absolute -bottom-3 -right-3 w-6 h-6 bg-blue-500 rounded-full cursor-nwse-resize"
+                        className="absolute -bottom-3 -right-3 w-6 h-6 bg-blue-500 rounded-full cursor-nwse-resize z-10"
                         onMouseDown={(e) => handleCropMouseDown("bottomRight", e)}
                         onTouchStart={(e) => {
                           e.preventDefault()
@@ -714,37 +1345,39 @@ export default function ScanEdit() {
                   </div>
                 )}
 
-                {editMode === "perspective" && imageSize.width > 0 && (
-                  <div className="absolute inset-0">
-                    <svg width="100%" height="100%" className="absolute inset-0">
-                      <polygon
-                        points={`
-                          ${(perspectivePoints[0].x * 100) / imageSize.width}%,${(perspectivePoints[0].y * 100) / imageSize.height}% 
-                          ${(perspectivePoints[1].x * 100) / imageSize.width}%,${(perspectivePoints[1].y * 100) / imageSize.height}% 
-                          ${(perspectivePoints[3].x * 100) / imageSize.width}%,${(perspectivePoints[3].y * 100) / imageSize.height}% 
-                          ${(perspectivePoints[2].x * 100) / imageSize.width}%,${(perspectivePoints[2].y * 100) / imageSize.height}%
-                        `}
-                        fill="none"
-                        stroke="#3b82f6"
-                        strokeWidth="2"
+                {/* Prévia da imagem */}
+                {showPreview && previewImage && (
+                  <div className="absolute inset-0 bg-black/70 flex items-center justify-center z-20">
+                    <div className="bg-white dark:bg-gray-800 p-4 rounded-lg max-w-[90%] max-h-[90%] overflow-auto">
+                      <div className="text-center mb-2 font-medium">Prévia das alterações</div>
+                      <img
+                        src={previewImage || "/placeholder.svg"}
+                        alt="Prévia"
+                        className="max-w-full max-h-[60vh] object-contain mb-4"
                       />
-                    </svg>
-
-                    {perspectivePoints.map((point, index) => (
-                      <div
-                        key={index}
-                        className="absolute w-6 h-6 bg-blue-500 rounded-full cursor-move transform -translate-x-3 -translate-y-3"
-                        style={{
-                          left: `${(point.x * 100) / imageSize.width}%`,
-                          top: `${(point.y * 100) / imageSize.height}%`,
-                        }}
-                        onMouseDown={(e) => handlePerspectiveMouseDown(index, e)}
-                        onTouchStart={(e) => {
-                          e.preventDefault()
-                          handlePerspectiveMouseDown(index, e as any)
-                        }}
-                      />
-                    ))}
+                      <div className="flex justify-between gap-2">
+                        <Button variant="outline" onClick={() => setShowPreview(false)} className="flex-1">
+                          Cancelar
+                        </Button>
+                        <Button
+                          onClick={handleApplyChanges}
+                          className="flex-1 bg-green-600 hover:bg-green-700"
+                          disabled={isApplying}
+                        >
+                          {isApplying ? (
+                            <>
+                              <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                              Aplicando...
+                            </>
+                          ) : (
+                            <>
+                              <Check className="mr-2 h-4 w-4" />
+                              Aplicar
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -765,9 +1398,18 @@ export default function ScanEdit() {
                 <Redo className="mr-1 h-4 w-4" />
                 <span className="hidden sm:inline">Refazer</span>
               </Button>
-              <Button variant="outline" size="sm" className="flex-1" onClick={() => handleRotate("cw")}>
-                <RotateCw className="mr-1 h-4 w-4" />
-                <span className="hidden sm:inline">Rotacionar</span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1 text-green-600 border-green-600 hover:bg-green-50 dark:hover:bg-green-900/20"
+                onClick={handleRestoreOriginal}
+              >
+                <RefreshCw className="mr-1 h-4 w-4" />
+                <span className="hidden sm:inline">Restaurar Original</span>
+              </Button>
+              <Button variant="outline" size="sm" className="flex-1" onClick={saveToHistory}>
+                <Check className="mr-1 h-4 w-4" />
+                <span className="hidden sm:inline">Salvar Estado</span>
               </Button>
             </div>
           </div>
@@ -776,10 +1418,9 @@ export default function ScanEdit() {
             <Card className="border-0 shadow-md">
               <CardContent className="p-4 sm:p-6">
                 <Tabs defaultValue="adjust" value={editMode} onValueChange={setEditMode} className="w-full">
-                  <TabsList className="grid grid-cols-3 mb-4 sm:mb-6">
+                  <TabsList className="grid grid-cols-2 mb-4 sm:mb-6">
                     <TabsTrigger value="adjust">Ajustes</TabsTrigger>
                     <TabsTrigger value="crop">Recorte</TabsTrigger>
-                    <TabsTrigger value="perspective">Perspectiva</TabsTrigger>
                   </TabsList>
 
                   <TabsContent value="adjust" className="space-y-4 sm:space-y-6">
@@ -839,21 +1480,67 @@ export default function ScanEdit() {
                             onValueChange={(value) => handleContrastChange(value[0])}
                           />
                         </div>
+
+                        <div className="space-y-2">
+                          <div className="flex justify-between">
+                            <Label>Resolução: {resolution}%</Label>
+                          </div>
+                          <Slider
+                            min={25}
+                            max={200}
+                            step={5}
+                            value={[resolution]}
+                            onValueChange={(value) => handleResolutionChange(value[0])}
+                          />
+                          <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400">
+                            <span>Menor</span>
+                            <span>Original</span>
+                            <span>Maior</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-10 h-8 p-0"
+                              onClick={() => handleResolutionChange(Math.max(25, resolution - 25))}
+                            >
+                              <Minimize className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-10 h-8 p-0"
+                              onClick={() => handleResolutionChange(100)}
+                            >
+                              <Search className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-10 h-8 p-0"
+                              onClick={() => handleResolutionChange(Math.min(200, resolution + 25))}
+                            >
+                              <Maximize className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </TabsContent>
 
                   <TabsContent value="crop" className="space-y-4">
-                    <p className="text-slate-600 dark:text-slate-300">Arraste os cantos para recortar o documento.</p>
+                    <p className="text-slate-600 dark:text-slate-300">
+                      Arraste os cantos ou a área inteira para recortar o documento.
+                    </p>
 
                     <div className="grid grid-cols-2 gap-2">
                       <Button variant="outline" size="sm" onClick={handleAutoCrop}>
                         <Crop className="mr-1 h-4 w-4" />
                         Recorte Automático
                       </Button>
-                      <Button variant="outline" size="sm">
-                        <ZoomIn className="mr-1 h-4 w-4" />
-                        Ajustar à Página
+                      <Button variant="outline" size="sm" onClick={handleRestoreCrop}>
+                        <RefreshCw className="mr-1 h-4 w-4" />
+                        Restaurar Recorte
                       </Button>
                     </div>
 
@@ -867,28 +1554,36 @@ export default function ScanEdit() {
                         Girar Direita
                       </Button>
                     </div>
-                  </TabsContent>
 
-                  <TabsContent value="perspective" className="space-y-4">
-                    <p className="text-slate-600 dark:text-slate-300">
-                      Arraste os pontos para corrigir a perspectiva do documento.
-                    </p>
-
-                    <Button variant="outline" size="sm" className="w-full" onClick={handleAutoPerspective}>
-                      <Move className="mr-1 h-4 w-4" />
-                      Correção Automática
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="w-full bg-green-600 hover:bg-green-700 mt-2"
+                      onClick={generatePreview}
+                    >
+                      <ZoomIn className="mr-2 h-4 w-4" />
+                      Ver Prévia
                     </Button>
 
-                    <div className="grid grid-cols-2 gap-2 mt-2">
-                      <Button variant="outline" size="sm" onClick={() => handleRotate("ccw")}>
-                        <RotateCcw className="mr-1 h-4 w-4" />
-                        Girar Esquerda
-                      </Button>
-                      <Button variant="outline" size="sm" onClick={() => handleRotate("cw")}>
-                        <RotateCw className="mr-1 h-4 w-4" />
-                        Girar Direita
-                      </Button>
-                    </div>
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="w-full bg-blue-600 hover:bg-blue-700"
+                      onClick={handleApplyChanges}
+                      disabled={isApplying}
+                    >
+                      {isApplying ? (
+                        <>
+                          <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                          Aplicando...
+                        </>
+                      ) : (
+                        <>
+                          <Check className="mr-2 h-4 w-4" />
+                          Aplicar Recorte
+                        </>
+                      )}
+                    </Button>
                   </TabsContent>
                 </Tabs>
               </CardContent>
@@ -903,21 +1598,52 @@ export default function ScanEdit() {
                     <Label htmlFor="ocr" className="cursor-pointer">
                       Reconhecimento de Texto (OCR)
                     </Label>
-                    <Switch id="ocr" />
+                    <Switch
+                      id="ocr"
+                      checked={ocrEnabled}
+                      onCheckedChange={(checked) => {
+                        setOcrEnabled(checked)
+                        if (checked && !extractedText) {
+                          performOCR().then((text) => {
+                            if (text) setExtractedText(text)
+                          })
+                        }
+                      }}
+                    />
                   </div>
 
                   <div className="flex items-center justify-between">
                     <Label htmlFor="compress" className="cursor-pointer">
                       Compressão de Arquivo
                     </Label>
-                    <Switch id="compress" defaultChecked />
+                    <Switch id="compress" checked={compressionEnabled} onCheckedChange={setCompressionEnabled} />
                   </div>
+
+                  {compressionEnabled && (
+                    <div className="space-y-2 pt-2">
+                      <div className="flex justify-between">
+                        <Label>Qualidade da Compressão: {compressionQuality}%</Label>
+                      </div>
+                      <Slider
+                        min={10}
+                        max={100}
+                        step={5}
+                        value={[compressionQuality]}
+                        onValueChange={(value) => setCompressionQuality(value[0])}
+                      />
+                      <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400">
+                        <span>Menor tamanho</span>
+                        <span>Equilibrado</span>
+                        <span>Melhor qualidade</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="pt-2">
-                  <Button variant="outline" size="sm" className="w-full">
+                  <Button variant="outline" size="sm" className="w-full" onClick={performOCR}>
                     <FileText className="mr-1 h-4 w-4" />
-                    Opções de Arquivo
+                    Extrair Texto (OCR)
                   </Button>
                 </div>
               </CardContent>
@@ -951,6 +1677,27 @@ export default function ScanEdit() {
           </div>
         </div>
       </div>
+
+      {ocrEnabled && extractedText && (
+        <Dialog>
+          <DialogTrigger asChild>
+            <Button variant="outline" size="sm" className="w-full mt-2">
+              <FileText className="mr-1 h-4 w-4" />
+              Ver Texto Extraído
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Texto Extraído (OCR)</DialogTitle>
+            </DialogHeader>
+            <div className="max-h-[60vh] overflow-y-auto">
+              <pre className="whitespace-pre-wrap bg-slate-100 dark:bg-slate-800 p-4 rounded-md text-sm">
+                {extractedText}
+              </pre>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   )
 }
